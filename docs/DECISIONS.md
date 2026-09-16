@@ -75,3 +75,11 @@ _2026-09-16_
   free on this machine. Phase 3-4 will sample short windows around each validation cutoff `T` and
   discard raw/cleaned intermediates after aggregating to the vessel-month panel, rather than
   accumulating years of raw positions.
+
+_2026-09-16_
+
+- **The high orphaned-MMSI rate from P1-2 (71%) is not a data quality problem — checked by
+  breaking it down by `ship_type`.** Small craft with no IMO requirement (Sailing, Pleasure) account
+  for almost all of it; Tanker (97%) and Cargo (93%) — the classes that matter for sanctions
+  evasion — are well covered. Reframes P2-5 (identity anomalies): a Tanker/Cargo vessel *without* a
+  valid IMO is the interesting case, not the orphaned rate in general.

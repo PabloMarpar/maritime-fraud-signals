@@ -56,6 +56,12 @@ rather than accumulating raw days.
   HTTP.~~ Superseded — the archive moved to S3, reached over verified HTTPS. See
   `docs/DECISIONS.md`.
 - ~~Whether the real DMA file is `.zip` or `.csv`.~~ Decided: `.zip`, confirmed live.
+- ~~Whether the 71% orphaned-MMSI rate (no valid IMO) from P1-2 is a data quality problem.~~
+  Checked: no. Broken down by `ship_type`, orphaned MMSI is dominated by Sailing (98% orphaned) and
+  Pleasure (99% orphaned) — small craft with no IMO requirement. The classes that matter for
+  sanctions evasion are well covered: Tanker 97% have a valid IMO, Cargo 93%. Worth revisiting for
+  Detector 4 (P2-5): a Tanker/Cargo vessel *without* a valid IMO would be the anomaly worth flagging,
+  not the orphaned rate in general.
 - **Meaning of the real schema's trailing `a, b, c, d` columns** (unlabelled in the source CSV,
   passed through untouched by every module so far) — likely AIS antenna/base-station diagnostic
   fields, not confirmed. Only worth resolving if a future detector needs them.
