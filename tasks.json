@@ -4,15 +4,15 @@
   "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
   "tasks": [
     { "id": "P0-1", "phase": 0, "done": true,  "description": "Scaffold repository: layout, continuity files, subagents, commands" },
-    { "id": "P0-2", "phase": 0, "done": false, "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date (code ready and unit-tested against mocked HTTP; the actual live download for 2024-06-05 is still pending, blocked on network access -- see docs/STATE.md)" },
-    { "id": "P0-3", "phase": 0, "done": false, "description": "Open the Parquet with DuckDB; confirm column schema, row count, distinct vessel count" },
-    { "id": "P0-4", "phase": 0, "done": true,  "description": "Render one day of vessel positions on a static map. Goal: ships on screen on day one (code ready and tested against synthetic data; still needs pointing at the real downloaded day, see docs/STATE.md)" },
+    { "id": "P0-2", "phase": 0, "done": true,  "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date. Real day landed 2026-09-16: 2024-06-05, 17,239,519 rows, 4,878 distinct MMSI, format confirmed .zip, served from the DMA's S3 archive (web.ais.dk is dead, see docs/DECISIONS.md)" },
+    { "id": "P0-3", "phase": 0, "done": true,  "description": "Open the Parquet with DuckDB; confirm column schema, row count, distinct vessel count. Done 2026-09-16 against the real 2024-06-05 day" },
+    { "id": "P0-4", "phase": 0, "done": true,  "description": "Render one day of vessel positions on a static map. Done against the real 2024-06-05 day: outputs/quicklook_2024-06-05.png" },
     { "id": "P0-5", "phase": 0, "done": true,  "description": "Dockerfile and reproducible environment" },
 
-    { "id": "P1-1", "phase": 1, "done": false, "description": "Clean AIS: drop invalid MMSI, impossible coordinates, duplicate messages" },
-    { "id": "P1-2", "phase": 1, "done": false, "description": "Identity resolution: link MMSI to IMO, detect reused and orphaned MMSI" },
-    { "id": "P1-3", "phase": 1, "done": false, "description": "Reconstruct tracks per vessel and segment into voyages" },
-    { "id": "P1-4", "phase": 1, "done": false, "description": "Unit tests with synthetic cases for each cleaning pathology" },
+    { "id": "P1-1", "phase": 1, "done": true,  "description": "Clean AIS: drop invalid MMSI, impossible coordinates, duplicate messages. process/clean.py, validated against real 2024-06-05 day: 17,239,519 -> 10,429,200 rows" },
+    { "id": "P1-2", "phase": 1, "done": true,  "description": "Identity resolution: link MMSI to IMO, detect reused and orphaned MMSI. process/identity.py, validated against real day: 4,519 MMSI, 1,304 with valid IMO, 3,215 orphaned" },
+    { "id": "P1-3", "phase": 1, "done": true,  "description": "Reconstruct tracks per vessel and segment into voyages. process/tracks.py, 6h gap threshold (parameterized), validated against real day: 4,751 voyages" },
+    { "id": "P1-4", "phase": 1, "done": true,  "description": "Unit tests with synthetic cases for each cleaning pathology. Satisfied by the test suites built alongside P1-1/P1-2/P1-3: 54 tests total, all passing" },
 
     { "id": "P2-1", "phase": 2, "done": false, "description": "Empirical coverage map: receive probability per sea grid cell and vessel class. Core technical piece" },
     { "id": "P2-2", "phase": 2, "done": false, "description": "Detector 1: deliberate AIS gaps. Output a probability, not a boolean" },

@@ -5,21 +5,28 @@ All sources are open, free and publicly documented. Verified reachable on 2026-0
 ## AIS positions
 
 ### Danish Maritime Authority — historical
-- **URL:** `http://web.ais.dk/aisdata/`
-- **Contents:** daily files, `aisdk-YYYY-MM-DD.csv` (possibly `.zip` — see verification note below),
-  from 2006 onwards.
+- **URL:** `https://s3.eu-central-1.amazonaws.com/aisdata.ais.dk/{year}/aisdk-{YYYY-MM-DD}.zip`
+  (path-style S3 URL — see quirk below). Confirmed live 2026-09-16.
+- **Contents:** daily files, `{year}/aisdk-YYYY-MM-DD.zip`, from 2006 onwards (older years may ship
+  monthly archives instead of daily — not yet needed, revisit when Phase 3-4 widens the range).
 - **Access:** direct download, no registration.
-- **Quirk:** the HTTPS certificate (`*.govcloud.dk`) is expired (confirmed 2026-09-16 via
-  `openssl s_client`, `notAfter=Jun 12 23:59:59 2025 GMT`) and the HTTPS listener resets the
-  connection once a request is sent, even with certificate verification disabled. Use plain HTTP,
-  and document the choice — do not silently disable certificate verification.
-- **Verification note (2026-09-16):** could not confirm the real filename/extension against a live
-  request — the sandbox `ingest/dma.py` was built in blocks all outbound port 80 (confirmed with a
-  control request to an unrelated, definitely-live plain-HTTP site, which timed out identically).
-  `ingest/dma.py` therefore tries `aisdk-YYYY-MM-DD.zip` first, falls back to `.csv` on a 404, and
-  sniffs the downloaded bytes for the zip magic number rather than trusting the extension. Whoever
-  runs the first live download from a network that actually reaches port 80 should update this
-  entry with the confirmed format.
+- **Quirk (superseded, kept for history):** the legacy host `http://web.ais.dk/aisdata/` documented
+  here previously no longer answers on port 80 from any network tested, and its HTTPS listener
+  serves a certificate (`*.govcloud.dk`) that doesn't match the hostname and then resets the
+  connection. The archive has since moved to an S3 bucket, `aisdata.ais.dk`. Do not resurrect the
+  `web.ais.dk` URL.
+- **Quirk (current):** the bucket name contains dots, so the virtual-hosted-style URL
+  (`aisdata.ais.dk.s3.eu-central-1.amazonaws.com`) fails TLS hostname verification against Amazon's
+  wildcard certificate. Use the **path-style** URL (`s3.eu-central-1.amazonaws.com/aisdata.ais.dk/...`)
+  instead — it verifies cleanly over HTTPS. Do not "fix" the virtual-hosted form with `verify=False`.
+- **Schema quirk (confirmed live 2026-09-16):** the real CSV header's first column is literally
+  `# Timestamp` (stray leading `#`, an export-tool artifact) rather than `Timestamp`.
+  `ingest.dma._normalise` strips it so the landed column is plain `timestamp` like every other
+  field. Real schema has 22 CSV columns plus 4 unlabelled trailing ones (`a, b, c, d` after
+  normalisation) whose meaning is not yet confirmed — likely AIS antenna/base-station diagnostic
+  fields; revisit if they turn out to matter.
+- **Verified 2026-09-16 (real download, 2024-06-05):** format is `.zip`, 610 MB compressed,
+  17,239,519 rows, 4,878 distinct MMSI. The question of `.zip` vs `.csv` is closed.
 - **Why this source:** dense coverage of the Danish straits, the chokepoint through which all
   Baltic oil traffic must pass.
 

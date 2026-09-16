@@ -39,3 +39,39 @@ _2026-09-16_
   session's sandbox blocks all outbound port 80, so the live download and the real-format check are
   postponed to a session run from home, rather than bypassing the sandbox on a work machine for
   convenience.
+
+_2026-09-16_
+
+- **Used `dangerouslyDisableSandbox` from the author's personal machine, on explicit request, to
+  complete the real download.** Confirmed the sandbox was the only blocker (Windows Firewall had no
+  outbound block rules; the same request timed out with the sandbox off, ruling out router/ISP too,
+  once a plain-HTTP control site also failed and then a bucket host succeeded). Read-only HTTP/S
+  requests carry no risk to the host. Not a precedent for the work machine.
+- **`web.ais.dk` is dead; the DMA archive now lives at S3 bucket `aisdata.ais.dk`
+  (`eu-central-1`), reached over path-style HTTPS.** Discovered via web search after the legacy host
+  timed out even with the sandbox disabled. `ingest/dma.py` and `docs/DATA_SOURCES.md` updated
+  accordingly. This also closes the open question of `.zip` vs `.csv`: confirmed `.zip`.
+- **P0-2 and P0-3 done: real 2024-06-05 data landed and verified.** 17,239,519 rows, 4,878 distinct
+  MMSI. Quicklook PNG shows the expected dense cluster over Danish/Baltic waters, plus a handful of
+  far-flung outlier points (South America, mid-Atlantic, near-Antarctic, Indian Ocean) — left as-is
+  rather than filtered, since implausible-but-in-range positions are exactly what the Phase 2
+  spoofing detector exists to catch, not a quicklook bug.
+
+_2026-09-16_
+
+- **Phase 1's three modules (`process/clean.py`, `process/identity.py`, `process/tracks.py`) each
+  validated with a real-data smoke check against the 2024-06-05 day, not just synthetic tests.**
+  Confirms the DuckDB-only, no-pandas approach holds up at real scale (~17M rows) before trusting it
+  for Phase 2's detectors.
+- **`identity.py` and `tracks.py` output flat cross-date tables (`data/identity/`, `data/tracks/`),
+  not Hive-partitioned by day like `clean.py`.** An MMSI↔IMO pairing and a voyage are inherently
+  cross-date facts (a voyage can span a day boundary); a per-day partition would arbitrarily split
+  them. Only `clean.py`'s output is naturally day-scoped.
+- **Voyage segmentation uses a single time-gap signal (default 6h, parameterized), not
+  `navigational_status`.** Kept deliberately simple for Phase 1; classifying a gap as suspicious vs.
+  ordinary is Phase 2 Detector 1's job, not this module's.
+- **Disk budget is the binding constraint for widening the date range, not download time.** One raw
+  day is ~507 MB; continuous multi-year download (~542 GB for 3 years) does not fit in the ~79 GB
+  free on this machine. Phase 3-4 will sample short windows around each validation cutoff `T` and
+  discard raw/cleaned intermediates after aggregating to the vessel-month panel, rather than
+  accumulating years of raw positions.

@@ -1,24 +1,27 @@
 """Downloader for Danish Maritime Authority (DMA) historical AIS data.
 
-Source: ``http://web.ais.dk/aisdata/`` — one file per calendar day, covering
+Source: the DMA AIS archive S3 bucket — one file per calendar day, covering
 every AIS message received by the Danish coastal network that day. See
 ``docs/DATA_SOURCES.md`` for licence and reachability notes.
 
 Two quirks of this source drive the design below:
 
-1. **Plain HTTP, not HTTPS.** The archive's certificate (``*.govcloud.dk``)
-   is expired. This is documented and deliberate, not a bug: we use the
-   ``http://`` URL directly rather than silently passing ``verify=False``
-   to a client that thinks it is doing HTTPS. Do not "fix" this by switching
-   to ``https://`` with verification disabled.
-2. **The on-disk format is not fully pinned down.** The archive is known to
-   have shipped daily files as bare CSV in some periods and as a zip archive
-   containing one CSV in others, and the true format for a given day was not
-   confirmed against a live request while this module was written — outbound
-   port 80 was unreachable from that environment (see the task notes in
-   ``docs/STATE.md``). ``_fetch_day`` therefore tries both known filename
-   patterns, and ``_extract_csv`` sniffs the downloaded bytes (zip magic
-   number) rather than trusting the URL extension.
+1. **Path-style S3 URLs over HTTPS.** The archive has moved to an S3 bucket
+   (``aisdata.ais.dk``, region ``eu-central-1``); the legacy host
+   ``web.ais.dk`` no longer answers on port 80 and its HTTPS listener serves
+   a mismatched certificate and then resets the connection. The bucket name
+   contains dots, so the virtual-hosted URL
+   ``aisdata.ais.dk.s3.eu-central-1.amazonaws.com`` does not match Amazon's
+   ``*.s3.eu-central-1.amazonaws.com`` wildcard certificate. The path-style
+   form used in ``BASE_URL`` puts the bucket in the path instead, so the
+   hostname matches and TLS verification passes normally. Never "fix" a
+   certificate error here by passing ``verify=False``.
+2. **Keys are namespaced by year, and the format has varied.** A daily key
+   looks like ``2024/aisdk-2024-06-05.zip``. Confirmed live on 2026-09-16:
+   that day is a 610 MB zip. Older years ship monthly rather than daily
+   archives, and bare CSV has been used in some periods, so ``_fetch_day``
+   still tries both known patterns and ``_extract_csv`` sniffs the downloaded
+   bytes (zip magic number) rather than trusting the key's extension.
 """
 
 from __future__ import annotations
@@ -37,13 +40,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Plain HTTP, not HTTPS: see module docstring point 1.
-BASE_URL = "http://web.ais.dk/aisdata"
+# Path-style S3 URL, not the legacy host: see module docstring point 1.
+BASE_URL = "https://s3.eu-central-1.amazonaws.com/aisdata.ais.dk"
 
-# Candidate filenames for a given day, tried in order until one is found.
-# Zip is tried first: it is what the archive is believed to serve today
-# (see module docstring point 2); bare CSV is the documented fallback.
-FILENAME_PATTERNS = ("aisdk-{day}.zip", "aisdk-{day}.csv")
+# Candidate keys for a given day, tried in order until one is found. Keys are
+# namespaced by year. Zip is tried first: confirmed live for 2024-06-05 (see
+# module docstring point 2); bare CSV is the documented fallback for periods
+# where the archive shipped uncompressed.
+FILENAME_PATTERNS = ("{year}/aisdk-{day}.zip", "{year}/aisdk-{day}.csv")
 
 RAW_ROOT = Path("data/raw/ais_dk")
 
@@ -73,8 +77,9 @@ def _fetch_day(day: date, client: httpx.Client, dest_dir: Path) -> Path:
     """
     last_error: Exception | None = None
     for pattern in FILENAME_PATTERNS:
-        filename = pattern.format(day=day.isoformat())
-        url = f"{BASE_URL}/{filename}"
+        key = pattern.format(year=day.year, day=day.isoformat())
+        filename = Path(key).name
+        url = f"{BASE_URL}/{key}"
         local_path = dest_dir / filename
         try:
             with client.stream("GET", url) as response:
@@ -127,8 +132,15 @@ def _extract_csv(raw_path: Path, work_dir: Path) -> Path:
 
 
 def _normalise(column: str) -> str:
-    """DMA column headers are 'Title Case With Spaces'; make them SQL/parquet friendly."""
-    return column.strip().lower().replace(" ", "_").replace("-", "_")
+    """DMA column headers are 'Title Case With Spaces'; make them SQL/parquet friendly.
+
+    Confirmed live on 2026-09-16: the real file's first header is
+    ``# Timestamp`` — a stray leading ``#`` (a comment-marker artifact from
+    whatever tool the DMA uses to export the file), not a distinct field.
+    Stripped here so the column lands as plain ``timestamp`` like every
+    other field, rather than the meaningless ``#_timestamp``.
+    """
+    return column.strip().lstrip("#").strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _csv_to_parquet(csv_path: Path, parquet_path: Path) -> int:
@@ -153,7 +165,7 @@ def _csv_to_parquet(csv_path: Path, parquet_path: Path) -> int:
         )
         columns = con.execute("DESCRIBE raw").fetchall()
         select_list = ", ".join(
-            f'"{col[0]}" AS {_normalise(col[0])}' for col in columns
+            f'"{col[0]}" AS "{_normalise(col[0])}"' for col in columns
         )
         parquet_target = parquet_path.as_posix()
         con.execute(
