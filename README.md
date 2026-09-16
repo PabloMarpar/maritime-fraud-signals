@@ -1,0 +1,42 @@
+# maritime-fraud-signals
+
+Detecting evasive vessel behaviour from open AIS data, validated against official sanctions lists.
+
+> **Status:** scaffolding. No analysis has been run yet. See [`docs/STATE.md`](docs/STATE.md).
+
+## The problem
+
+Merchant vessels broadcast their position continuously over AIS (Automatic Identification System),
+a public, mandatory radio protocol. Vessels engaged in sanctions evasion routinely interfere with
+that signal: they switch the transponder off in specific waters, broadcast falsified positions,
+change identity, and transfer cargo ship-to-ship on the open sea to obscure its origin.
+
+Over 2,100 vessels are currently designated under US, EU, UK and UN sanctions regimes for this
+behaviour, and new tranches are published every month.
+
+## The approach
+
+Five rule-based detectors run over reconstructed vessel tracks. Their output feeds a risk score
+that ranks vessels for analyst review. Every alert carries the specific evidence that triggered it.
+
+The detectors are deliberately **not** machine learning. They encode physics and maritime practice,
+so they work without training data and their reasoning is inspectable.
+
+## How it is evaluated
+
+Strict forward-looking validation: the model is fitted only on information available before a cutoff
+date `T`, then scored against sanctions designations published **after** `T`. This measures whether
+the system anticipates official designations rather than memorising them.
+
+Calibration is reported explicitly — a score of 0.8 must be right about 80% of the time.
+
+## Data sources
+
+All open, free, and publicly documented. See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
+
+No personal data enters the pipeline at any stage. The only identifiers used are vessel identifiers
+(MMSI, IMO), which are public by international convention.
+
+## Licence
+
+MIT. Each upstream data source retains its own terms; see `docs/DATA_SOURCES.md` for attribution.

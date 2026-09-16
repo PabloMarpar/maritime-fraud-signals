@@ -1,0 +1,47 @@
+{
+  "project": "maritime-fraud-signals",
+  "updated": "2026-09-16",
+  "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
+  "tasks": [
+    { "id": "P0-1", "phase": 0, "done": true,  "description": "Scaffold repository: layout, continuity files, subagents, commands" },
+    { "id": "P0-2", "phase": 0, "done": false, "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date" },
+    { "id": "P0-3", "phase": 0, "done": false, "description": "Open the Parquet with DuckDB; confirm column schema, row count, distinct vessel count" },
+    { "id": "P0-4", "phase": 0, "done": false, "description": "Render one day of vessel positions on a static map. Goal: ships on screen on day one" },
+    { "id": "P0-5", "phase": 0, "done": false, "description": "Dockerfile and reproducible environment" },
+
+    { "id": "P1-1", "phase": 1, "done": false, "description": "Clean AIS: drop invalid MMSI, impossible coordinates, duplicate messages" },
+    { "id": "P1-2", "phase": 1, "done": false, "description": "Identity resolution: link MMSI to IMO, detect reused and orphaned MMSI" },
+    { "id": "P1-3", "phase": 1, "done": false, "description": "Reconstruct tracks per vessel and segment into voyages" },
+    { "id": "P1-4", "phase": 1, "done": false, "description": "Unit tests with synthetic cases for each cleaning pathology" },
+
+    { "id": "P2-1", "phase": 2, "done": false, "description": "Empirical coverage map: receive probability per sea grid cell and vessel class. Core technical piece" },
+    { "id": "P2-2", "phase": 2, "done": false, "description": "Detector 1: deliberate AIS gaps. Output a probability, not a boolean" },
+    { "id": "P2-3", "phase": 2, "done": false, "description": "Detector 2: position spoofing (impossible speeds, positions on land, synthetic circles, simultaneous positions)" },
+    { "id": "P2-4", "phase": 2, "done": false, "description": "Detector 3: ship-to-ship transfers, using the GFW definition" },
+    { "id": "P2-5", "phase": 2, "done": false, "description": "Detector 4: identity anomalies (flag, name, MMSI changes)" },
+    { "id": "P2-6", "phase": 2, "done": false, "description": "Detector 5: declared-behaviour contradictions (draught vs port calls, destination vs heading)" },
+    { "id": "P2-7", "phase": 2, "done": false, "description": "Measure agreement of detector 3 against the GFW Events API" },
+
+    { "id": "P3-1", "phase": 3, "done": false, "description": "Ingest OFAC, EU and UK sanctions lists, capturing designation dates" },
+    { "id": "P3-2", "phase": 3, "done": false, "description": "Join sanctions to vessels by IMO and MMSI; quantify match rate and ambiguity" },
+    { "id": "P3-3", "phase": 3, "done": false, "description": "Build the labelled vessel-month panel" },
+
+    { "id": "P4-1", "phase": 4, "done": false, "description": "Naive baseline: tanker over 15 years old under a flag of convenience" },
+    { "id": "P4-2", "phase": 4, "done": false, "description": "Isolation Forest on the vessel-month features" },
+    { "id": "P4-3", "phase": 4, "done": false, "description": "LightGBM with rolling temporal cutoffs; report precision@20 and lift over baseline" },
+    { "id": "P4-4", "phase": 4, "done": false, "description": "Calibration: reliability curve and Brier score" },
+    { "id": "P4-5", "phase": 4, "done": false, "description": "SHAP attribution so every alert carries its reasons" },
+    { "id": "P4-6", "phase": 4, "done": false, "description": "Run analyst-review for temporal leakage and validation honesty" },
+    { "id": "P4-7", "phase": 4, "done": false, "description": "Write the label-bias section of the README" },
+
+    { "id": "P5-1", "phase": 5, "done": false, "description": "Export tracks, gaps and encounters as GeoJSON/Arrow for the map" },
+    { "id": "P5-2", "phase": 5, "done": false, "description": "deck.gl + MapLibre map: animated tracks, gaps in red, encounters marked" },
+    { "id": "P5-3", "phase": 5, "done": false, "description": "Publish to GitHub Pages; verify on mobile and desktop" },
+    { "id": "P5-4", "phase": 5, "done": false, "description": "Vessel dossier generator with explicit confidence levels" },
+
+    { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled" },
+    { "id": "P6-2", "phase": 6, "done": false, "description": "Scheduled ingestion via GitHub Actions" },
+    { "id": "P6-3", "phase": 6, "done": false, "description": "Reproduce a known case: score a sanctioned vessel on its pre-designation history" },
+    { "id": "P6-4", "phase": 6, "done": false, "description": "Final README and second analyst-review pass" }
+  ]
+}
