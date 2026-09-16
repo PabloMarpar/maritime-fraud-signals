@@ -29,3 +29,13 @@ _2026-09-16_
   few weeks for pathology variety. Phase 3-4 needs years of depth — the temporal-cutoff experiment
   requires several cutoffs `T` each with enough "before" and "after". Gibraltar/Ceuta is never a
   bulk download: it is continuous live capture via AISStream, starting in Phase 6.
+- **Phase 0 sample day: 2024-06-05.** An ordinary Wednesday, no Danish or EU public holiday, so
+  traffic should be representative rather than a quiet/busy outlier.
+- **`ingest/dma.py` sniffs the downloaded bytes (zip magic number) instead of trusting the URL
+  extension, and tries `.zip` before `.csv`.** The real on-disk format could not be confirmed
+  against a live request while writing the module (see next decision), so the code is built to be
+  correct either way rather than guessing once and hardcoding it.
+- **Did not use `dangerouslyDisableSandbox` to reach `web.ais.dk` from the work computer.** This
+  session's sandbox blocks all outbound port 80, so the live download and the real-format check are
+  postponed to a session run from home, rather than bypassing the sandbox on a work machine for
+  convenience.

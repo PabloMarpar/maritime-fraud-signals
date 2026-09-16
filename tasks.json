@@ -4,7 +4,7 @@
   "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
   "tasks": [
     { "id": "P0-1", "phase": 0, "done": true,  "description": "Scaffold repository: layout, continuity files, subagents, commands" },
-    { "id": "P0-2", "phase": 0, "done": false, "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date" },
+    { "id": "P0-2", "phase": 0, "done": false, "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date (code ready and unit-tested against mocked HTTP; the actual live download for 2024-06-05 is still pending, blocked on network access -- see docs/STATE.md)" },
     { "id": "P0-3", "phase": 0, "done": false, "description": "Open the Parquet with DuckDB; confirm column schema, row count, distinct vessel count" },
     { "id": "P0-4", "phase": 0, "done": true,  "description": "Render one day of vessel positions on a static map. Goal: ships on screen on day one (code ready and tested against synthetic data; still needs pointing at the real downloaded day, see docs/STATE.md)" },
     { "id": "P0-5", "phase": 0, "done": true,  "description": "Dockerfile and reproducible environment" },
