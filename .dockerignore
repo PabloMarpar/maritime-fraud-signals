@@ -1,0 +1,33 @@
+# Mirrors .gitignore in spirit, plus Docker/VCS-specific noise.
+# Data and outputs are large/gitignored and are mounted as volumes instead.
+data/
+outputs/
+
+.git/
+.gitignore
+.dockerignore
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets
+.env
+*.key
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Claude Code / project tooling not needed inside the image
+.claude/
+notebooks/
+*.local.md

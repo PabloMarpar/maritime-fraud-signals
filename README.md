@@ -37,6 +37,29 @@ All open, free, and publicly documented. See [`docs/DATA_SOURCES.md`](docs/DATA_
 No personal data enters the pipeline at any stage. The only identifiers used are vessel identifiers
 (MMSI, IMO), which are public by international convention.
 
+## Reproducing the environment
+
+A `Dockerfile` pins Python and every dependency so the pipeline runs identically on any machine.
+`data/` and `outputs/` are never baked into the image — they are gitignored and mounted as volumes
+so results land back on the host:
+
+```bash
+docker build -t maritime-fraud-signals .
+
+# Run the test suite (the default command):
+docker run --rm -v "$(pwd)/data:/app/data" -v "$(pwd)/outputs:/app/outputs" maritime-fraud-signals
+
+# Drop into a shell to run an ingestion module instead:
+docker run --rm -it \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/outputs:/app/outputs" \
+  -v "$(pwd)/.env:/app/.env:ro" \
+  maritime-fraud-signals bash
+```
+
+Secrets (e.g. the AISStream key, once `ingest/aisstream.py` exists) live in `.env` on the host and
+are mounted read-only at run time — never copied into the image.
+
 ## Licence
 
 MIT. Each upstream data source retains its own terms; see `docs/DATA_SOURCES.md` for attribution.

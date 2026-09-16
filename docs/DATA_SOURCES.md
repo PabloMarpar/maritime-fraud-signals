@@ -6,10 +6,20 @@ All sources are open, free and publicly documented. Verified reachable on 2026-0
 
 ### Danish Maritime Authority — historical
 - **URL:** `http://web.ais.dk/aisdata/`
-- **Contents:** daily CSV files, `aisdk-YYYY-MM-DD.csv`, from 2006 onwards.
+- **Contents:** daily files, `aisdk-YYYY-MM-DD.csv` (possibly `.zip` — see verification note below),
+  from 2006 onwards.
 - **Access:** direct download, no registration.
-- **Quirk:** the HTTPS certificate is expired. Use plain HTTP, and document the choice — do not
-  silently disable certificate verification.
+- **Quirk:** the HTTPS certificate (`*.govcloud.dk`) is expired (confirmed 2026-09-16 via
+  `openssl s_client`, `notAfter=Jun 12 23:59:59 2025 GMT`) and the HTTPS listener resets the
+  connection once a request is sent, even with certificate verification disabled. Use plain HTTP,
+  and document the choice — do not silently disable certificate verification.
+- **Verification note (2026-09-16):** could not confirm the real filename/extension against a live
+  request — the sandbox `ingest/dma.py` was built in blocks all outbound port 80 (confirmed with a
+  control request to an unrelated, definitely-live plain-HTTP site, which timed out identically).
+  `ingest/dma.py` therefore tries `aisdk-YYYY-MM-DD.zip` first, falls back to `.csv` on a 404, and
+  sniffs the downloaded bytes for the zip magic number rather than trusting the extension. Whoever
+  runs the first live download from a network that actually reaches port 80 should update this
+  entry with the confirmed format.
 - **Why this source:** dense coverage of the Danish straits, the chokepoint through which all
   Baltic oil traffic must pass.
 

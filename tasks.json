@@ -6,8 +6,8 @@
     { "id": "P0-1", "phase": 0, "done": true,  "description": "Scaffold repository: layout, continuity files, subagents, commands" },
     { "id": "P0-2", "phase": 0, "done": false, "description": "ingest/dma.py: download Danish AIS for a date range, land as Parquet partitioned by date" },
     { "id": "P0-3", "phase": 0, "done": false, "description": "Open the Parquet with DuckDB; confirm column schema, row count, distinct vessel count" },
-    { "id": "P0-4", "phase": 0, "done": false, "description": "Render one day of vessel positions on a static map. Goal: ships on screen on day one" },
-    { "id": "P0-5", "phase": 0, "done": false, "description": "Dockerfile and reproducible environment" },
+    { "id": "P0-4", "phase": 0, "done": true,  "description": "Render one day of vessel positions on a static map. Goal: ships on screen on day one (code ready and tested against synthetic data; still needs pointing at the real downloaded day, see docs/STATE.md)" },
+    { "id": "P0-5", "phase": 0, "done": true,  "description": "Dockerfile and reproducible environment" },
 
     { "id": "P1-1", "phase": 1, "done": false, "description": "Clean AIS: drop invalid MMSI, impossible coordinates, duplicate messages" },
     { "id": "P1-2", "phase": 1, "done": false, "description": "Identity resolution: link MMSI to IMO, detect reused and orphaned MMSI" },

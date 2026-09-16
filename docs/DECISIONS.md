@@ -21,3 +21,11 @@ _2026-09-16_
 - **Label bias gets its own README section.** Sanctioned vessels are the ones that were *caught*,
   not all offenders. Training on that label partly teaches the sanctioner's criteria. Saying so
   precisely is worth more than a decimal point of precision.
+
+_2026-09-16_
+
+- **Historical download range grows phase by phase, there is no single "download everything"
+  step.** Phase 0 pulls one day only, to prove the pipeline end to end fast. Phase 1-2 widens to a
+  few weeks for pathology variety. Phase 3-4 needs years of depth — the temporal-cutoff experiment
+  requires several cutoffs `T` each with enough "before" and "after". Gibraltar/Ceuta is never a
+  bulk download: it is continuous live capture via AISStream, starting in Phase 6.

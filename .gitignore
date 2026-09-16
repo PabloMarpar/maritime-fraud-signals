@@ -25,3 +25,6 @@ venv/
 # OS
 Thumbs.db
 .DS_Store
+
+# Personal, non-committed notes
+*.local.md
