@@ -46,18 +46,24 @@ happens well outside any area a Danish AIS point could be in -- only how fast it
 **Check 3: synthetic circles.** Some spoofing rigs replay a perfect geometric loop instead of a
 real track. Candidate voyages are pre-filtered cheaply from ``voyages.parquet`` alone
 (``point_count``/``duration_seconds``, see :data:`MIN_POINTS_FOR_CIRCLE` /
-:data:`MIN_VOYAGE_DURATION_FOR_CIRCLE_HOURS``) before any raw points are touched -- most voyages are
-short and never reach this stage. Surviving voyages' own points are re-queried from clean AIS by
-``mmsi``/``timestamp BETWEEN start_time AND end_time`` (simpler than going through
-``process.tracks.attach_voyage_ids`` for exactly one voyage's membership, which is already known
-from its own start/end). A circle is fit in Python with a Kasa algebraic least-squares fit (see
-:func:`_fit_circle`) over a local planar projection centred on the voyage's own start position --
-adequate at voyage scale (a few to tens of km), not geodesy. The Kasa fit is known to be biased for
-partial arcs or noisy data relative to a full nonlinear geometric fit; adequate for a flagging
-heuristic, not precision circle-fitting. Flags require a low residual-to-radius ratio, a plausible
-radius band, and a wide angular sweep (see the four ``CIRCLE_*``/``MIN_CIRCLE_*`` constants) all at
-once. **Unlike the other three checks, this event's coordinates are the fitted circle's centre**,
-converted back from planar to geographic, not any single observed AIS position.
+:data:`MIN_VOYAGE_DURATION_FOR_CIRCLE_HOURS``) -- but on real data most voyages pass this filter
+(68,431 of 95,692 in the pilot 30-day window; AIS reporting is frequent enough that even a
+short-ish voyage accumulates thousands of points), so **this alone does not keep the candidate set
+small**. The original version of this check then queried each candidate voyage's own points one at
+a time (``mmsi``/``timestamp BETWEEN start_time AND end_time``) and fit a circle in Python with
+numpy -- correct, but it never finished a real 30-day run in over 50 minutes (68,431 queries
+totalling 345 million points). :func:`check_synthetic_circles` now does the fit itself as bulk,
+grouped SQL aggregation instead: see its own docstring for the three-pass design (moment sums ->
+Kasa fit + radius-band gate in Python on ~9 numbers per voyage, not the points -> a second pass,
+scoped to survivors only, for the exact residual and angular-spread gates). A circle is still fit
+with the Kasa algebraic least-squares method (see :func:`_solve_circle`) over a local planar
+projection centred on the voyage's own start position -- adequate at voyage scale (a few to tens of
+km), not geodesy, and known to be biased for partial arcs or noisy data relative to a full
+nonlinear geometric fit; adequate for a flagging heuristic, not precision circle-fitting. Flags
+require a low residual-to-radius ratio, a plausible radius band, and a wide angular spread (see the
+``CIRCLE_*``/``MIN_CIRCLE_*``/``MAX_CIRCLE_*`` constants) all at once. **Unlike the other three
+checks, this event's coordinates are the fitted circle's centre**, converted back from planar to
+geographic, not any single observed AIS position.
 
 **Check 4: simultaneous positions.** Two messages from the same mmsi at the exact same timestamp,
 far enough apart to be physically impossible for one transponder (see
@@ -117,7 +123,12 @@ MIN_VOYAGE_DURATION_FOR_CIRCLE_HOURS = 1.0
 CIRCLE_RESIDUAL_RATIO_MAX = 0.03
 MIN_CIRCLE_RADIUS_M = 50.0
 MAX_CIRCLE_RADIUS_M = 20_000.0
-MIN_CIRCLE_ANGULAR_SWEEP_DEG = 180.0
+# Mean resultant length (standard circular-statistics dispersion measure, range [0, 1]): 0 means
+# points are spread uniformly around a full 360 degree circle, 1 means they are all bunched in one
+# direction. For points spread uniformly over an arc of just 180 degrees the value is 2/pi =~ 0.637,
+# so a value at or below this threshold means "at least roughly half the circle was covered" --
+# see module docstring for why this replaced a per-point angular-sweep calculation.
+MAX_CIRCLE_MEAN_RESULTANT_LENGTH = 0.6
 METERS_PER_DEG_LAT = 111_320.0
 
 # Check 4: simultaneous positions.
@@ -268,30 +279,28 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
     ]
 
 
-def _project_planar(
-    lat: np.ndarray, lon: np.ndarray, lat0: float, lon0: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Local planar approximation of (lat, lon) around (lat0, lon0), in metres.
+def _solve_circle(
+    n: int, sx: float, sy: float, sxx: float, syy: float, sxy: float, sux: float, suy: float
+) -> tuple[float, float, float] | None:
+    """Kasa algebraic circle fit from pre-aggregated moment sums (planar x/y in metres).
 
-    Adequate at voyage scale (a few to tens of km); not a general-purpose projection.
+    ``sux``/``suy`` are ``sum(x*(x^2+y^2))``/``sum(y*(x^2+y^2))``; ``sxx+syy`` is ``sum(x^2+y^2)``.
+    Returns ``(center_x, center_y, radius)`` or ``None`` if the normal-equation matrix is singular
+    (perfectly collinear points, or fewer than 3 effectively independent points). Known to be
+    biased for partial arcs / noisy data relative to a full geometric (nonlinear) fit -- adequate
+    for a flagging heuristic, not precision geodesy.
     """
-    x = (lon - lon0) * METERS_PER_DEG_LAT * np.cos(np.radians(lat0))
-    y = (lat - lat0) * METERS_PER_DEG_LAT
-    return x, y
-
-
-def _fit_circle(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float]:
-    """Kasa algebraic circle fit. Returns (center_x, center_y, radius) in the same planar units
-    as x/y. Known to be biased for partial arcs / noisy data relative to a full geometric
-    (nonlinear) fit -- adequate for a flagging heuristic, not precision geodesy.
-    """
-    A = np.column_stack([x, y, np.ones_like(x)])
-    b = x**2 + y**2
-    sol, *_ = np.linalg.lstsq(A, b, rcond=None)
-    a_coef, b_coef, c_coef = sol
+    matrix = np.array([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, float(n)]])
+    rhs = np.array([sux, suy, sxx + syy])
+    try:
+        a_coef, b_coef, c_coef = np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError:
+        return None
     cx, cy = a_coef / 2.0, b_coef / 2.0
-    r = float(np.sqrt(c_coef + cx**2 + cy**2))
-    return float(cx), float(cy), r
+    r_sq = c_coef + cx**2 + cy**2
+    if r_sq <= 0:
+        return None
+    return float(cx), float(cy), float(np.sqrt(r_sq))
 
 
 def check_synthetic_circles(
@@ -300,11 +309,42 @@ def check_synthetic_circles(
     start: date,
     end: date,
 ) -> list[SpoofingEvent]:
-    """Flag voyages whose points fit a near-perfect circle over a wide angular sweep.
+    """Flag voyages whose points fit a near-perfect circle over a wide angular spread.
 
-    Requires the `all_days` view (see :func:`_build_all_days`). Candidate voyages are pre-filtered
-    cheaply from voyages_path alone (point_count/duration_seconds, and start/end falling in
-    [start, end]) before any raw points are pulled -- see module docstring.
+    Requires the `all_days` view (see :func:`_build_all_days`). Three bulk, grouped SQL passes,
+    never one query per voyage -- see module docstring for why an earlier per-voyage-Python-loop
+    version of this check was not viable at real scale (68,431 of 95,692 real voyages passed the
+    point_count/duration pre-filter alone, comprising 345 million points in total; fetching each
+    voyage's points into Python one at a time never finished in over 50 minutes before being
+    killed):
+
+    1. Candidate voyages, pre-filtered cheaply from `voyages_path` alone (point_count/
+       duration_seconds, start/end within [start, end]) -- unchanged from before, still cheap
+       because it never touches raw points.
+    2. ONE grouped join between candidates and `all_days` (by mmsi + timestamp BETWEEN start_time
+       AND end_time) computing the Kasa fit's moment sums per voyage_id -- sum(x), sum(y),
+       sum(x^2), sum(y^2), sum(x*y), sum(x*(x^2+y^2)), sum(y*(x^2+y^2)) -- entirely as SQL
+       aggregates. Only these ~9 numbers per voyage (not the underlying points) are pulled into
+       Python, where :func:`_solve_circle` solves the 3x3 normal-equation system per voyage
+       (cheap, pure linear algebra, no further DB round trips) and the radius band gate
+       (:data:`MIN_CIRCLE_RADIUS_M`/:data:`MAX_CIRCLE_RADIUS_M`) is applied immediately -- most
+       candidates fail this gate (their fitted "circle" is nothing like the plausible size band),
+       so only a small survivor set proceeds to step 3.
+    3. A SECOND grouped join, scoped to just the survivors, computing the exact geometric
+       residual RMS and the angular spread in one more aggregate pass -- see below for why
+       spread is measured as a mean resultant length, not the sequential-unwrap sweep this
+       check used before the rewrite.
+
+    **Why mean resultant length, not angular sweep.** The original version unwrapped each point's
+    angle around the fitted centre (`numpy.unwrap`) and took `max - min` -- correct, but it needs
+    the points in a specific per-voyage array, which is exactly the pattern this rewrite eliminates.
+    Mean resultant length (`R = sqrt((sum cos theta)^2 + (sum sin theta)^2) / n`, standard
+    circular-statistics dispersion measure) needs only two more SQL sums (`sum(cos(theta))`,
+    `sum(sin(theta))`) alongside the residual sum, no ordering or unwrapping required. `R = 0` for
+    points spread uniformly over a full 360 degree circle, `R = 2/pi =~ 0.637` for a uniform
+    180 degree half-circle -- :data:`MAX_CIRCLE_MEAN_RESULTANT_LENGTH` (0.6) is pinned close to
+    that equivalence, not an independent guess. It also tolerates a vessel that briefly reverses
+    within the loop better than a naive unwrap would.
     """
     candidates = con.execute(
         "SELECT mmsi, voyage_id, start_time, end_time, start_latitude, start_longitude "
@@ -319,35 +359,80 @@ def check_synthetic_circles(
             end,
         ],
     ).fetchall()
+    if not candidates:
+        return []
 
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE _circle_candidates "
+        "(mmsi BIGINT, voyage_id VARCHAR, start_time TIMESTAMP, end_time TIMESTAMP, "
+        "lat0 DOUBLE, lon0 DOUBLE)"
+    )
+    con.executemany("INSERT INTO _circle_candidates VALUES (?, ?, ?, ?, ?, ?)", candidates)
+
+    moment_rows = con.execute(
+        "WITH pts AS ("
+        "  SELECT c.voyage_id, c.mmsi, c.lat0, c.lon0, "
+        f"         (a.longitude - c.lon0) * {METERS_PER_DEG_LAT} * cos(radians(c.lat0)) AS x, "
+        f"         (a.latitude - c.lat0) * {METERS_PER_DEG_LAT} AS y "
+        "  FROM _circle_candidates c "
+        "  JOIN all_days a ON a.mmsi = c.mmsi AND a.timestamp BETWEEN c.start_time AND c.end_time"
+        ") "
+        "SELECT voyage_id, any_value(mmsi), any_value(lat0), any_value(lon0), count(*), "
+        "       sum(x), sum(y), sum(x*x), sum(y*y), sum(x*y), "
+        "       sum((x*x + y*y) * x), sum((x*x + y*y) * y) "
+        "FROM pts GROUP BY voyage_id"
+    ).fetchall()
+
+    survivors = []  # (voyage_id, mmsi, lat0, lon0, cx, cy, r)
+    for voyage_id, mmsi, lat0, lon0, n, sx, sy, sxx, syy, sxy, sux, suy in moment_rows:
+        if n < MIN_POINTS_FOR_CIRCLE:
+            continue
+        fit = _solve_circle(n, sx, sy, sxx, syy, sxy, sux, suy)
+        if fit is None:
+            continue
+        cx, cy, r = fit
+        if MIN_CIRCLE_RADIUS_M <= r <= MAX_CIRCLE_RADIUS_M:
+            survivors.append((voyage_id, mmsi, lat0, lon0, cx, cy, r))
+
+    if not survivors:
+        return []
+
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE _circle_survivors "
+        "(voyage_id VARCHAR, mmsi BIGINT, lat0 DOUBLE, lon0 DOUBLE, "
+        "cx DOUBLE, cy DOUBLE, r DOUBLE)"
+    )
+    con.executemany("INSERT INTO _circle_survivors VALUES (?, ?, ?, ?, ?, ?, ?)", survivors)
+
+    fit_rows = con.execute(
+        "WITH pts AS ("
+        "  SELECT s.voyage_id, s.r, s.cx, s.cy, "
+        f"         (a.longitude - s.lon0) * {METERS_PER_DEG_LAT} * cos(radians(s.lat0)) AS x, "
+        f"         (a.latitude - s.lat0) * {METERS_PER_DEG_LAT} AS y "
+        "  FROM _circle_survivors s "
+        "  JOIN _circle_candidates c ON c.voyage_id = s.voyage_id "
+        "  JOIN all_days a ON a.mmsi = c.mmsi AND a.timestamp BETWEEN c.start_time AND c.end_time"
+        ") "
+        "SELECT voyage_id, any_value(r), count(*), "
+        "       sqrt(avg(pow(sqrt(pow(x - cx, 2) + pow(y - cy, 2)) - r, 2))) AS rms, "
+        "       sqrt(pow(sum(cos(atan2(y - cy, x - cx))), 2) "
+        "            + pow(sum(sin(atan2(y - cy, x - cx))), 2)) / count(*) AS mean_resultant_length "
+        "FROM pts GROUP BY voyage_id"
+    ).fetchall()
+
+    survivor_by_id = {v[0]: v for v in survivors}
+    start_by_id = {voyage_id: start_time for _mmsi, voyage_id, start_time, *_ in candidates}
     events: list[SpoofingEvent] = []
-    for mmsi, _voyage_id, voyage_start, voyage_end, lat0, lon0 in candidates:
-        points = con.execute(
-            "SELECT timestamp, latitude, longitude FROM all_days "
-            "WHERE mmsi = ? AND timestamp BETWEEN ? AND ? ORDER BY timestamp",
-            [mmsi, voyage_start, voyage_end],
-        ).fetchall()
-        if len(points) < MIN_POINTS_FOR_CIRCLE:
-            continue
-
-        lats = np.array([p[1] for p in points], dtype=float)
-        lons = np.array([p[2] for p in points], dtype=float)
-        x, y = _project_planar(lats, lons, lat0, lon0)
-        cx, cy, r = _fit_circle(x, y)
-        if r <= 0:
-            continue
-
-        residuals = np.sqrt((x - cx) ** 2 + (y - cy) ** 2) - r
-        rms_over_r = float(np.sqrt(np.mean(residuals**2)) / r)
-        angles = np.unwrap(np.arctan2(y - cy, x - cx))
-        angular_sweep_deg = float(np.degrees(angles.max() - angles.min()))
-
+    for voyage_id, r, n_points, rms, mean_resultant_length in fit_rows:
+        rms_over_r = float(rms) / r
         if not (
             rms_over_r <= CIRCLE_RESIDUAL_RATIO_MAX
-            and MIN_CIRCLE_RADIUS_M <= r <= MAX_CIRCLE_RADIUS_M
-            and angular_sweep_deg >= MIN_CIRCLE_ANGULAR_SWEEP_DEG
+            and mean_resultant_length <= MAX_CIRCLE_MEAN_RESULTANT_LENGTH
         ):
             continue
+
+        _voyage_id, mmsi, lat0, lon0, cx, cy, _r = survivor_by_id[voyage_id]
+        voyage_start = start_by_id[voyage_id]
 
         # Event coordinates are the fitted circle's centre, not any observed position -- see
         # module docstring.
@@ -365,7 +450,7 @@ def check_synthetic_circles(
                 evidence_value=rms_over_r,
                 detail=(
                     f"circle fit r={r:.0f}m, residual/r={rms_over_r:.4f}, "
-                    f"sweep={angular_sweep_deg:.0f}deg over {len(points)} points"
+                    f"mean resultant length={mean_resultant_length:.3f} over {n_points} points"
                 ),
             )
         )
