@@ -56,9 +56,8 @@ _Last updated: 2026-09-17_
   is a probability, not a boolean. Gaps of 12h or more get that probability clamped into an
   inconclusive `[0.4, 0.6]` band instead of trusted at face value, per P2-1b's finding that
   corroboration saturates past that duration. All thresholds are unvalidated defaults, same
-  posture as `detect/liveness.py`'s own. Not yet run over the real 30-day window (only
-  unit-tested against synthetic fixtures) — that run, and eyeballing the resulting probability
-  distribution, is outstanding.
+  posture as `detect/liveness.py`'s own. Run over the real 30-day window this session — see the
+  real-run finding below (most gaps are long enough to fall in the clamped, inconclusive band).
 - **P2-3 done: detector 2, position spoofing (`detect/spoofing.py`, `data/detect/spoofing.parquet`).**
   Four independent rule-based checks over clean AIS, merged into one flat table (one row per
   detected event, not per vessel, mirroring P2-2's own output shape): **impossible speed**
@@ -76,21 +75,35 @@ _Last updated: 2026-09-17_
   been benchmarked — both outstanding, see Next up.
 - 163 tests passing, `ruff` clean across the repo (as of this session's close).
 
+- **`detect.gaps` run over the real 30-day window (2024-06-01..2024-07-01), sanity-checked.**
+  74,546 candidate gaps scored (`data/detect/gaps.parquet`) — exactly `95,692 voyages - 21,146
+  distinct mmsi`, confirming `candidate_gaps` captured every voyage-to-voyage boundary correctly.
+  Took ~55 minutes wall-clock (heavily CPU-parallel via DuckDB) — much slower than expected for
+  11k-ish calls to `liveness_verdict`; not yet worth optimizing since it only needs to run once per
+  window, but note it if the working window ever grows. **The key finding**: gap duration is
+  strongly right-skewed — median 22h, only ~20% of gaps are under the 12h threshold where P2-1b
+  validated the corroboration signal as reliable. The other ~80% (mean duration in the 48-77h
+  range depending on verdict, tail out to 695h, 9.3% exceed a full week) get their probability
+  correctly clamped into the inconclusive `[0.4, 0.6]` band rather than trusted at face value — this
+  is the clamp working as designed, but it means **for most real gaps, this detector alone is only
+  weakly informative**; a very long silence needs a second signal (or accepting "inconclusive" as
+  the honest answer) before P2-2 can say much about it. The near-window-length tail (898 gaps
+  >500h, close to the full 720h window) likely reflects vessels with very sparse reporting overall
+  (few voyages total) rather than one genuine multi-day evasion each — a data-quality nuance to
+  keep in mind before reading those specific rows as strong fraud signal.
+- 163 tests passing, `ruff` clean across the repo (as of this session's close).
+
 ## In progress
 
-- **Running now, in the background**: `detect.gaps.build_gap_scores` over the real
-  2024-06-01..2024-07-01 window (started this session, not yet finished as of close — check for
-  `data/detect/gaps.parquet` next session; if present, the run completed and its sanity-check is
-  still outstanding, if absent, re-run `python -m detect.gaps --start 2024-06-01 --end 2024-07-01`).
+- Nothing running right now.
 
 ## Next up
 
-1. **Confirm the real `detect.gaps` run above finished** and sanity-check the output distribution
-   (verdict breakdown, mean probability, anything that looks miscalibrated) before trusting it.
-2. **Run `detect.spoofing.build_spoofing_events` over the same real window** and sanity-check its
-   output too — first checking whether the on-land join is actually fast enough at real scale
-   (millions of points) before assuming it is.
-3. After both are sanity-checked, **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is
+1. **Run `detect.spoofing.build_spoofing_events` over the same real window** and sanity-check its
+   output — first checking whether the on-land join is actually fast enough at real scale (millions
+   of points) before assuming it is; `detect.gaps`'s real run above took much longer than expected,
+   so budget time for this one too.
+2. After that's sanity-checked, **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is
    next in `tasks.json`.
 
 ## Blocked
@@ -100,9 +113,16 @@ _Last updated: 2026-09-17_
 ## Open questions
 
 - **`detect/gaps.py`'s verdict→probability table (0.9/0.15/0.5) and the 12h clamp band ([0.4, 0.6])
-  are unvalidated guesses**, never run against real data or checked against any labelled case.
-  Revisit once sanctions-list join (Phase 3) gives a handful of known-evasive vessels to sanity
-  check against, or sooner if the real-window run above looks obviously miscalibrated.
+  are unvalidated guesses**, never checked against any labelled case (the real 30-day run only
+  confirmed the code runs correctly and the clamp fires where expected, not that the numbers are
+  right). Revisit once sanctions-list join (Phase 3) gives a handful of known-evasive vessels to
+  sanity check against.
+- **~80% of real candidate gaps (59,297 of 74,546) are ≥12h and land in the clamped, inconclusive
+  band** — P2-2 alone says little about most real silences, only the shorter ~20%. Worth deciding,
+  before leaning on this detector's output in `features/`, whether that's acceptable (report
+  "inconclusive" honestly) or whether a second signal for long gaps is worth building first (e.g.
+  destination/ETA consistency, or a same-route-history prior) — not decided yet, just surfaced by
+  the real run.
 - **`MIN_EXPECTED_CORROBORATORS` (3.0) and `MIN_BASELINE_VESSELS` (3) in `detect/liveness.py` are
   unvalidated defaults**, the same posture `detect/coverage.py`'s retired threshold had. Revisit if
   P2-2's output looks miscalibrated at the boundary between `area_dark` and `no_evidence`.
