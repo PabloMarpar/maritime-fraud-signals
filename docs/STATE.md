@@ -59,19 +59,39 @@ _Last updated: 2026-09-17_
   posture as `detect/liveness.py`'s own. Not yet run over the real 30-day window (only
   unit-tested against synthetic fixtures) — that run, and eyeballing the resulting probability
   distribution, is outstanding.
-- 140 tests passing, `ruff` clean across the repo (as of this session's close).
+- **P2-3 done: detector 2, position spoofing (`detect/spoofing.py`, `data/detect/spoofing.parquet`).**
+  Four independent rule-based checks over clean AIS, merged into one flat table (one row per
+  detected event, not per vessel, mirroring P2-2's own output shape): **impossible speed**
+  (consecutive same-mmsi pairs implying >50kn via great-circle distance/time), **on land**
+  (point-in-polygon against a new land mask, eroded ~1.1km inward to absorb the mask's own
+  coastline-generalization error), **synthetic circles** (a Kasa algebraic circle fit per voyage —
+  candidates pre-filtered cheaply by point count/duration before any raw points are pulled — flagged
+  on tight residual/radius plus a wide angular sweep), and **simultaneous positions** (same mmsi and
+  timestamp, positions too far apart for one transponder). New supporting module
+  `ingest/landmask.py` downloads and lands Natural Earth's land polygons once
+  (`data/reference/land.parquet`) — see `docs/DATA_SOURCES.md`. 23 new tests (163 total), `ruff`
+  clean. Every threshold in this detector (speed ceiling, erosion buffer, circle-fit gates,
+  simultaneous-position distance) is an unvalidated default, same posture as P2-2's. **Not yet run
+  against real data**, and the on-land spatial join's performance at the full 30-day scale has not
+  been benchmarked — both outstanding, see Next up.
+- 163 tests passing, `ruff` clean across the repo (as of this session's close).
 
 ## In progress
 
-- Nothing running right now.
+- **Running now, in the background**: `detect.gaps.build_gap_scores` over the real
+  2024-06-01..2024-07-01 window (started this session, not yet finished as of close — check for
+  `data/detect/gaps.parquet` next session; if present, the run completed and its sanity-check is
+  still outstanding, if absent, re-run `python -m detect.gaps --start 2024-06-01 --end 2024-07-01`).
 
 ## Next up
 
-**Run `detect.gaps.build_gap_scores` over the real 2024-06-01..2024-06-30 window** and sanity-check
-the output before starting P2-3 — `detect/gaps.py` has only been exercised against synthetic
-fixtures so far, not real data, and its verdict-to-probability table is an unvalidated guess (see
-Open questions). After that, **P2-3, detector 2: position spoofing** (impossible speeds, positions
-on land, synthetic circles, simultaneous positions) is next in `tasks.json`.
+1. **Confirm the real `detect.gaps` run above finished** and sanity-check the output distribution
+   (verdict breakdown, mean probability, anything that looks miscalibrated) before trusting it.
+2. **Run `detect.spoofing.build_spoofing_events` over the same real window** and sanity-check its
+   output too — first checking whether the on-land join is actually fast enough at real scale
+   (millions of points) before assuming it is.
+3. After both are sanity-checked, **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is
+   next in `tasks.json`.
 
 ## Blocked
 

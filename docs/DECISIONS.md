@@ -221,3 +221,31 @@ _2026-09-17_
   `detect/gaps.py` floors both endpoints with its own `_to_cell` (same epsilon-before-floor,
   round-after-multiply convention as `detect.liveness`/`detect.coverage`) before calling it. Worth
   remembering for any future caller of `cells_within` with real vessel positions.
+
+- **P2-3's "positions on land" check uses Natural Earth's 10m-scale land polygons via DuckDB's
+  `spatial` extension, not a new heavyweight geospatial dependency.** Reason: `duckdb spatial`
+  (`INSTALL/LOAD spatial`) reads a shapefile directly (`ST_Read`), round-trips its native `GEOMETRY`
+  column through Parquet with no WKB conversion needed, and runs `ST_Contains`/`ST_Buffer` in plain
+  SQL — all verified working in this session — which keeps the project's DuckDB-only convention
+  intact instead of adding `geopandas`/`cartopy`/a raster-mask package. `shapely`/`pyproj` were
+  already dependencies but unused for this; they remain unused, spatial extension covers it.
+- **The land polygons are eroded ~1.1km inward (`COASTAL_EROSION_DEG = 0.01`) before testing
+  containment.** Reason: Natural Earth's 1:10,000,000-scale coastline is a generalization, not a
+  precise boundary — verified empirically that a real Copenhagen on-land point sits ~205m outside
+  the raw polygon. Without erosion, a position that is actually at sea near a jagged coastline
+  could get flagged `on_land` just because the simplified polygon bulges out over real water; erosion
+  trades some false negatives (real on-land positions very close to shore go unflagged) for avoiding
+  that false-positive direction, which was judged the safer failure mode for a fraud-flagging
+  detector. Unvalidated size, sized to the one measured offset, not a systematic study.
+- **The synthetic-circle check uses a Kasa algebraic circle fit (linear least squares), not a full
+  nonlinear geometric fit.** Reason: it reduces to a single `numpy.linalg.lstsq` call and is
+  standard practice for this kind of flagging heuristic; it is known to be biased for partial arcs
+  or noisy data relative to a nonlinear fit, which is why the detector also gates on angular sweep
+  (>=180°) and a radius band, not on residual ratio alone — a tight algebraic fit over a short,
+  nearly-straight arc would otherwise still look deceptively "circular".
+- **Detector output for both P2-2 and P2-3 is one row per detected event, not one row per vessel or
+  vessel-month.** Reason: keeps each detector a pure, inspectable function of the evidence it found,
+  with no premature aggregation decision baked in; rolling events up to the vessel-month panel is
+  explicitly deferred to the not-yet-built `features/` module (Phase 2's own task list), which can
+  choose how to combine multiple events/confidences without the detectors needing to agree on that
+  now.

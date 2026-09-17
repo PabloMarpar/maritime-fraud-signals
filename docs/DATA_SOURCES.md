@@ -72,3 +72,19 @@ closed and no longer updated — do not use it.
 ### DTU Data — academic benchmark
 - *AIS Trajectories from Danish Waters for Abnormal Behavior Detection*
 - `https://data.dtu.dk/collections/AIS_Trajectories_from_Danish_Waters_for_Abnormal_Behavior_Detection/6287841`
+
+## Reference geometry (not AIS, not a label)
+
+### Natural Earth — land polygons
+- **URL:** `https://naciscdn.org/naturalearth/10m/physical/ne_10m_land.zip` (primary), mirrored at
+  `https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip` (fallback). Both verified live
+  2026-09-17, identical content (3,269,070 bytes, `application/zip`).
+- **Contents:** a shapefile (`.shp`/`.shx`/`.dbf`/`.prj`), 11 features, at 1:10,000,000 scale.
+- **Access:** direct download, no registration, public domain.
+- **Role:** `ingest/landmask.py` lands this once as `data/reference/land.parquet` (DuckDB spatial's
+  `ST_Read`, native `GEOMETRY` column round-trips through Parquet directly). `detect/spoofing.py`'s
+  "position on land" check is the only consumer.
+- **Quirk (verified 2026-09-17):** this is a generalized coastline, not a precise boundary. A
+  genuinely on-land point in central Copenhagen (55.6761, 12.5683) sits ~205m *outside* the polygon.
+  `detect/spoofing.py` compensates with a ~1.1km inward erosion buffer before testing containment —
+  see `docs/DECISIONS.md`. Do not treat this dataset as ground truth right at a coastline.
