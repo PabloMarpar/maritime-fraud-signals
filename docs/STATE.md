@@ -47,7 +47,19 @@ _Last updated: 2026-09-17_
   pre-registered falsification bar for short-to-medium gaps (+19.0/+16.6 points) but only weakly
   for 12h+ gaps (+6.4 points) — **the signal is validated for short-to-medium AIS gaps, not for
   very long ones**, P2-2 must not lean on it alone there.
-- 126 tests passing, `ruff` clean across the repo (as of this session's close).
+- **P2-2 done: detector 1, deliberate AIS gaps (`detect/gaps.py`, `data/detect/gaps.parquet`).**
+  Every consecutive pair of voyages for the same MMSI in `voyages.parquet` is already a candidate
+  gap (voyage segmentation only draws the boundary; classifying it was this module's job per
+  `docs/DECISIONS.md`) — scored by calling `detect.liveness.liveness_verdict` once per gap on grid
+  cells from both endpoints (where the vessel went dark, where it reappeared). A fixed table maps
+  the verdict to a probability (`receiver_alive`=0.9, `area_dark`=0.15, `no_evidence`=0.5); output
+  is a probability, not a boolean. Gaps of 12h or more get that probability clamped into an
+  inconclusive `[0.4, 0.6]` band instead of trusted at face value, per P2-1b's finding that
+  corroboration saturates past that duration. All thresholds are unvalidated defaults, same
+  posture as `detect/liveness.py`'s own. Not yet run over the real 30-day window (only
+  unit-tested against synthetic fixtures) — that run, and eyeballing the resulting probability
+  distribution, is outstanding.
+- 140 tests passing, `ruff` clean across the repo (as of this session's close).
 
 ## In progress
 
@@ -55,10 +67,11 @@ _Last updated: 2026-09-17_
 
 ## Next up
 
-**P2-2, detector 1: deliberate AIS gaps.** `detect.liveness.liveness_verdict` is ready to call.
-Known constraint to design around: the corroboration signal is validated for short-to-medium gaps
-but weak for 12h+ gaps (see `docs/DECISIONS.md`) — very long silences need either a different
-signal alongside it or an explicit "low confidence" treatment, not a naive read of the verdict.
+**Run `detect.gaps.build_gap_scores` over the real 2024-06-01..2024-06-30 window** and sanity-check
+the output before starting P2-3 — `detect/gaps.py` has only been exercised against synthetic
+fixtures so far, not real data, and its verdict-to-probability table is an unvalidated guess (see
+Open questions). After that, **P2-3, detector 2: position spoofing** (impossible speeds, positions
+on land, synthetic circles, simultaneous positions) is next in `tasks.json`.
 
 ## Blocked
 
@@ -66,6 +79,10 @@ signal alongside it or an explicit "low confidence" treatment, not a naive read 
 
 ## Open questions
 
+- **`detect/gaps.py`'s verdict→probability table (0.9/0.15/0.5) and the 12h clamp band ([0.4, 0.6])
+  are unvalidated guesses**, never run against real data or checked against any labelled case.
+  Revisit once sanctions-list join (Phase 3) gives a handful of known-evasive vessels to sanity
+  check against, or sooner if the real-window run above looks obviously miscalibrated.
 - **`MIN_EXPECTED_CORROBORATORS` (3.0) and `MIN_BASELINE_VESSELS` (3) in `detect/liveness.py` are
   unvalidated defaults**, the same posture `detect/coverage.py`'s retired threshold had. Revisit if
   P2-2's output looks miscalibrated at the boundary between `area_dark` and `no_evidence`.

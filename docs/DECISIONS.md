@@ -201,3 +201,23 @@ _2026-09-17_
     long gaps specifically (e.g. multi-day AIS-off stretches).
   - Gate correctness: every `area_dark` verdict had `n_baseline_vessels >= 3` (0 violations) —
     confirms the breadth gate from fix #2 above is wired correctly, not just present in the code.
+
+- **P2-2 (`detect/gaps.py`) treats every consecutive pair of voyages for the same MMSI in
+  `voyages.parquet` as the candidate-gap set, with no separate gap extraction from raw points.**
+  Reason: `process.tracks`'s own docstring already assigns "classify this gap as suspicious or
+  ordinary" to Phase 2 Detector 1, so the voyage boundary (gap > `gap_hours`, default 6h) already
+  defines the candidate population; re-deriving it independently would just duplicate that logic
+  with a second, possibly inconsistent threshold.
+- **P2-2's verdict-to-probability mapping is a fixed table (`receiver_alive`=0.9, `area_dark`=0.15,
+  `no_evidence`=0.5), not a formula, and gaps ≥12h get the result clamped into `[0.4, 0.6]`.**
+  Reason: keeps the detector inspectable per the project's rule-based-detector convention, and the
+  clamp directly encodes P2-1b's own falsification finding (corroboration saturates and stops
+  discriminating past ~12h) instead of silently trusting a verdict known to be unreliable there.
+  All five numbers (three probabilities, the 12h cutoff, the clamp band) are unvalidated defaults,
+  not tuned constants — see `docs/STATE.md` open questions.
+- **`detect.liveness.cells_within` expects already-floored grid cells, not raw lat/lon.** A caller
+  (P2-2) passing a gap's raw endpoint positions straight into it would silently join the liveness
+  table on almost nothing, since a real position almost never lands exactly on a 0.1° boundary.
+  `detect/gaps.py` floors both endpoints with its own `_to_cell` (same epsilon-before-floor,
+  round-after-multiply convention as `detect.liveness`/`detect.coverage`) before calling it. Worth
+  remembering for any future caller of `cells_within` with real vessel positions.
