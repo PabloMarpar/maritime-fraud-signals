@@ -548,10 +548,17 @@ def build_spoofing_events(
         _build_all_days(con, partitions)
 
         events: list[SpoofingEvent] = []
-        events.extend(check_impossible_speed(con))
-        events.extend(check_on_land(con, land_path))
-        events.extend(check_synthetic_circles(con, voyages_path, start, end))
-        events.extend(check_simultaneous_positions(con))
+        for name, run_check in (
+            ("impossible_speed", lambda: check_impossible_speed(con)),
+            ("on_land", lambda: check_on_land(con, land_path)),
+            ("synthetic_circle", lambda: check_synthetic_circles(con, voyages_path, start, end)),
+            ("simultaneous_position", lambda: check_simultaneous_positions(con)),
+        ):
+            check_start = datetime.now(timezone.utc)
+            found = run_check()
+            elapsed = (datetime.now(timezone.utc) - check_start).total_seconds()
+            logger.info("Check %s: %d event(s) in %.1fs", name, len(found), elapsed)
+            events.extend(found)
 
         counts: dict[str, int] = {}
         for event in events:
