@@ -23,19 +23,31 @@ it only splits tracks on the plain distance/time rule.
 continuous track, since this module keys everything by MMSI alone. Detecting
 and correcting for that is out of scope for P1-3.
 
-**Output shape.** Like ``process.identity``, both outputs are flat, whole-
-range tables under ``data/tracks/``, not Hive-partitioned by day: a voyage
-is inherently cross-date (it can start on one day and end on the next), so
-partitioning by date would risk splitting a single voyage's points across
-two files and would make "how many points in this voyage" a multi-file
-query. For the same reason there is no ``reconstruct_day`` counterpart to
-``reconstruct_range`` -- a single day is just a range of length one.
+**Output shape.** Like ``process.identity``, the output is a flat, whole-
+range table at ``data/tracks/voyages.parquet``, not Hive-partitioned by day:
+a voyage is inherently cross-date (it can start on one day and end on the
+next), so partitioning by date would risk splitting a single voyage's points
+across two files and would make "how many points in this voyage" a
+multi-file query. For the same reason there is no ``reconstruct_day``
+counterpart to ``reconstruct_range`` -- a single day is just a range of
+length one.
 
-1. ``data/tracks/points.parquet`` -- every input position, unchanged, plus
-   ``voyage_seq`` (1-based, restarting at 1 for each MMSI) and ``voyage_id``
-   (``"{mmsi}-{voyage_seq}"``), ordered by (mmsi, timestamp).
-2. ``data/tracks/voyages.parquet`` -- one row per (mmsi, voyage_seq): start
-   and end time, start and end position, point count and duration.
+``data/tracks/voyages.parquet`` has one row per (mmsi, voyage_seq): start and
+end time, start and end position, point count and duration.
+
+**No materialized points table.** An earlier version of this module also
+wrote ``data/tracks/points.parquet`` -- every input position, unchanged,
+plus ``voyage_seq``/``voyage_id`` -- but that is a full duplicate copy of
+the clean range (13 GB for the 30-day Phase 2 window) just to carry two
+extra columns. Instead, :func:`attach_voyage_ids` reconstructs that mapping
+on demand, without ever writing it to disk: it ASOF-joins any clean-data
+query to ``voyages.parquet`` on ``mmsi`` and "largest ``start_time`` <= the
+point's ``timestamp``". Voyages partition each MMSI's track without overlap
+or gaps by construction (:func:`_reconstruct`'s ``segmented`` view assigns
+every point to exactly one running voyage_seq), so for any point that ASOF
+match is exact and unique -- there is no need to also bound by ``end_time``.
+This is the function detectors (Phase 2) use to get voyage context for a
+clean-data query without ever materializing a second copy of the range.
 
 All of this runs as DuckDB window/aggregate queries over views; the data is
 never pulled into Python.
@@ -55,7 +67,6 @@ logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 TRACKS_ROOT = Path("data/tracks")
-POINTS_PATH = TRACKS_ROOT / "points.parquet"
 VOYAGES_PATH = TRACKS_ROOT / "voyages.parquet"
 
 # Default voyage-boundary gap: see module docstring for the reasoning.
@@ -163,25 +174,23 @@ def reconstruct_range(
     out_root: Path = TRACKS_ROOT,
     gap_hours: float = DEFAULT_GAP_HOURS,
     force: bool = False,
-) -> tuple[Path, Path]:
+) -> Path:
     """Reconstruct tracks and segment voyages for every clean partition in [start, end].
 
-    Idempotent: if both output files already exist, this is a no-op unless
-    force=True. Returns (points_path, voyages_path) either way. Raises
-    FileNotFoundError if no clean partition exists anywhere in the requested
-    range; a partial range with some days missing only warns, see
-    _existing_partitions. Because of the cross-date design (see module
-    docstring), there is deliberately no ``reconstruct_day``.
+    Idempotent: if the output file already exists, this is a no-op unless
+    force=True. Returns voyages_path either way. Raises FileNotFoundError if
+    no clean partition exists anywhere in the requested range; a partial
+    range with some days missing only warns, see _existing_partitions.
+    Because of the cross-date design (see module docstring), there is
+    deliberately no ``reconstruct_day``.
     """
-    points_path = out_root / "points.parquet"
     voyages_path = out_root / "voyages.parquet"
-    if points_path.exists() and voyages_path.exists() and not force:
+    if voyages_path.exists() and not force:
         logger.info(
-            "%s and %s already exist, skipping (pass force=True / --force to rebuild)",
-            points_path,
+            "%s already exists, skipping (pass force=True / --force to rebuild)",
             voyages_path,
         )
-        return points_path, voyages_path
+        return voyages_path
 
     partitions = _existing_partitions(start, end, in_root)
     if not partitions:
@@ -209,16 +218,37 @@ def reconstruct_range(
 
         out_root.mkdir(parents=True, exist_ok=True)
         con.execute(
-            "COPY (SELECT * FROM points ORDER BY mmsi, timestamp) "
-            f"TO '{points_path.as_posix()}' (FORMAT PARQUET)"
-        )
-        con.execute(
             "COPY (SELECT * FROM voyages ORDER BY mmsi, voyage_seq) "
             f"TO '{voyages_path.as_posix()}' (FORMAT PARQUET)"
         )
     finally:
         con.close()
-    return points_path, voyages_path
+    return voyages_path
+
+
+def attach_voyage_ids(
+    con: duckdb.DuckDBPyConnection,
+    clean_sql: str,
+    voyages_path: Path,
+    view: str = "points",
+) -> None:
+    """Create/replace `view` as clean_sql joined to voyage_seq/voyage_id via ASOF JOIN.
+
+    Reconstructs the (mmsi, timestamp) -> (voyage_seq, voyage_id) mapping that used to
+    live in points.parquet, on demand, without materializing a duplicate copy of the
+    clean data. clean_sql is any SQL query/subquery producing clean AIS rows (must
+    include mmsi and timestamp columns). Voyages partition each MMSI's track without
+    overlap or gaps (by construction, see reconstruct_range), so for any point the ASOF
+    join to the voyage with the largest start_time <= the point's timestamp is exact
+    and unique -- there is no need to also bound by end_time.
+    """
+    con.execute(
+        f"CREATE OR REPLACE VIEW {view} AS "
+        f"SELECT c.*, v.voyage_seq, v.voyage_id "
+        f"FROM ({clean_sql}) c "
+        f"ASOF JOIN read_parquet('{voyages_path.as_posix()}') v "
+        f"ON c.mmsi = v.mmsi AND c.timestamp >= v.start_time"
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -240,7 +270,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--out-dir", default=str(TRACKS_ROOT), help="Root for the points/voyages output tables"
+        "--out-dir", default=str(TRACKS_ROOT), help="Root for the voyages output table"
     )
     return parser.parse_args(argv)
 

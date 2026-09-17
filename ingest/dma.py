@@ -184,12 +184,18 @@ def download_day(
     out_root: Path = RAW_ROOT,
     force: bool = False,
     client: httpx.Client | None = None,
+    tmp_dir: Path | None = None,
 ) -> Path:
     """Download and land one day of DMA AIS data as Parquet.
 
     Idempotent: if the day's partition already exists, this is a no-op
     unless force=True. Returns the path to the partition's Parquet file
-    either way.
+    either way. tmp_dir, if given, is the parent directory for the working
+    TemporaryDirectory (zip + extracted CSV); by default (None) that lands
+    under the platform temp dir, which on Windows is the C: drive rather
+    than wherever data/ lives -- pipeline.backfill passes tmp_dir=data/tmp
+    explicitly so its disk-space guard measures the same volume the download
+    actually writes to.
     """
     parquet_path = _partition_path(day, out_root)
     if parquet_path.exists() and not force:
@@ -202,10 +208,10 @@ def download_day(
     owns_client = client is None
     client = client or httpx.Client(timeout=60.0)
     try:
-        with tempfile.TemporaryDirectory(prefix=f"dma-{day.isoformat()}-") as tmp:
-            tmp_dir = Path(tmp)
-            raw_path = _fetch_day(day, client, tmp_dir)
-            csv_path = _extract_csv(raw_path, tmp_dir)
+        with tempfile.TemporaryDirectory(prefix=f"dma-{day.isoformat()}-", dir=tmp_dir) as tmp:
+            work_dir = Path(tmp)
+            raw_path = _fetch_day(day, client, work_dir)
+            csv_path = _extract_csv(raw_path, work_dir)
             row_count = _csv_to_parquet(csv_path, parquet_path)
             logger.info("Landed %d rows for %s at %s", row_count, day.isoformat(), parquet_path)
     finally:
@@ -220,18 +226,19 @@ def download_range(
     out_root: Path = RAW_ROOT,
     force: bool = False,
     client: httpx.Client | None = None,
+    tmp_dir: Path | None = None,
 ) -> list[Path]:
     """Download DMA AIS data for every day in [start, end], inclusive.
 
     A single client is reused across the whole range (connection pooling);
     pass one in for testing, otherwise a default one is created and closed
-    automatically.
+    automatically. tmp_dir is forwarded to download_day, see its docstring.
     """
     owns_client = client is None
     client = client or httpx.Client(timeout=60.0)
     try:
         results = [
-            download_day(day, out_root=out_root, force=force, client=client)
+            download_day(day, out_root=out_root, force=force, client=client, tmp_dir=tmp_dir)
             for day in _daterange(start, end)
         ]
     finally:

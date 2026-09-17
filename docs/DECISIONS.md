@@ -83,3 +83,37 @@ _2026-09-16_
   for almost all of it; Tanker (97%) and Cargo (93%) — the classes that matter for sanctions
   evasion — are well covered. Reframes P2-5 (identity anomalies): a Tanker/Cargo vessel *without* a
   valid IMO is the interesting case, not the orphaned rate in general.
+
+_2026-09-17_
+
+- **P2-1 coverage map built over 2024-06-01..2024-06-30: 62.5% of (cell, ship_type) estimates
+  are exactly 1.0 and none below 0.5.** Consistent with — not despite — the selection-bias/
+  circularity limitation documented in `detect/coverage.py` (a pair only forms between two
+  received messages, so true coverage holes vanish rather than scoring low). The map must not be
+  treated as ground-truth receiver coverage until that's addressed (e.g. cross-vessel
+  corroboration); P2-2 must not naively read a low `coverage_probability` as "just bad coverage,
+  not evasion" until then.
+- **Phase 2's working window is 30 contiguous days, 2024-06-01..2024-06-30, not a longer or
+  split range.** Big enough to develop and unit-test all five detectors and to surface phenomena a
+  single day can't (1 reused MMSI appeared, vs. 0 on the single day). If a detector later needs
+  more variety (noisy P2-1 estimates, too few ship-to-ship candidates, no reused MMSI beyond the
+  one found), extend by adding separate weeks spread across the year rather than more contiguous
+  June days — same disk cost, far more seasonal/behavioural variety, and the code already tolerates
+  gaps in the requested range without changes.
+- **`data/tracks/points.parquet` removed; voyage membership is now attached on demand via
+  `process.tracks.attach_voyage_ids` (an ASOF JOIN against `voyages.parquet`).** The old file was a
+  full copy of the clean range plus two columns — 13 GB of pure duplication over the 30-day window.
+  Voyages partition each MMSI's track without overlap, so the ASOF join (nearest voyage start at or
+  before a point's timestamp) is exact and unique; no information was lost.
+- **The download/process/discard cycle (`pipeline/backfill.py`, `pipeline/manifest.json`) only
+  discards raw data, not cleaned data, for now.** Phase 2's detectors don't exist yet, so it isn't
+  known what a safe reduction of a cleaned day would need to keep. Discarding cleaned days once
+  detectors exist and are validated (turning `identity`/`tracks`-style whole-range rebuilds into
+  mergeable per-window partials) is deferred to Phase 3. `data/manifest.json` is tracked in git
+  (explicit `.gitignore` exception) so this state survives even though `data/` itself is not
+  committed.
+- **`pipeline/backfill.py`'s disk guard defaults to 20 GB free, and `ingest.dma.download_day` now
+  accepts a `tmp_dir` pointed at `data/tmp` instead of the OS default temp directory.** The OS
+  default lands on the same drive being guarded but outside where the guard measures unless told
+  otherwise; without this the disk check could pass while the actual download (a transient
+  multi-GB zip+CSV) fills the same volume elsewhere.

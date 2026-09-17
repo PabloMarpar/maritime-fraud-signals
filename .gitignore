@@ -2,6 +2,7 @@
 data/**
 !data/**/
 !data/**/.gitkeep
+!data/manifest.json
 outputs/**
 !outputs/.gitkeep
 
@@ -25,6 +26,9 @@ venv/
 # OS
 Thumbs.db
 .DS_Store
+
+# Ad-hoc run logs (e.g. backfill_*.log from a long-running pipeline job)
+*.log
 
 # Personal, non-committed notes
 *.local.md

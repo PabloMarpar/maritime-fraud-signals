@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-16_
+_Last updated: 2026-09-17_
 
 ## Done
 
@@ -11,24 +11,31 @@ _Last updated: 2026-09-16_
 - Data sources verified as open and reachable on 2026-09-16 (see `docs/DATA_SOURCES.md`).
 - **Phase 0 complete.** `ingest/dma.py` downloads a day/date range of Danish AIS from the DMA's S3
   archive (the legacy `web.ais.dk` host is dead; see `docs/DECISIONS.md`) and lands Parquet
-  partitioned by `date=YYYY-MM-DD`. Real day landed and verified: **2024-06-05**, 17,239,519 rows,
-  4,878 distinct MMSI, format confirmed `.zip`. `report/quicklook_map.py` rendered it —
-  `outputs/quicklook_2024-06-05.png` — dense cluster over Danish/Baltic waters as expected, plus a
-  few far-flung outlier points left untouched (Phase 2 spoofing-detector material, not a bug).
+  partitioned by `date=YYYY-MM-DD`. `report/quicklook_map.py` renders a day's positions.
   `Dockerfile` + `.dockerignore` done: reproducible environment, `data/`/`outputs/` as volumes.
-- **Phase 1 complete.** All three processing modules built and validated against the real
-  2024-06-05 day (not just synthetic fixtures), DuckDB-only, no pandas, matching `ingest/dma.py`'s
-  conventions:
-  - `process/clean.py` (P1-1): drops invalid MMSI, impossible coordinates, duplicate messages. Real
-    day: 17,239,519 → 10,429,200 rows (mostly duplicate broadcasts, expected for AIS).
-  - `process/identity.py` (P1-2): MMSI↔IMO resolution table (`data/identity/mmsi_imo.parquet`),
-    flags orphaned and reused MMSI. Real day: 4,519 MMSI, 1,304 with a valid IMO, 3,215 orphaned, 0
-    reused (single day — reuse only shows up across a longer range).
-  - `process/tracks.py` (P1-3): per-vessel track reconstruction and voyage segmentation on a
-    6-hour gap threshold (`data/tracks/points.parquet`, `data/tracks/voyages.parquet`). Real day:
-    4,519 vessels, 4,751 voyages, ~2,195 points/voyage average.
-  - P1-4 (synthetic unit tests per pathology) satisfied by the above: 54 tests total, all passing,
-    `ruff` clean across the repo.
+- **Phase 1 complete.** `process/clean.py`, `process/identity.py`, `process/tracks.py` — cleaning,
+  MMSI↔IMO identity resolution, and voyage segmentation (6h gap threshold, parameterized).
+  DuckDB-only, no pandas. `process/tracks.py` no longer writes `data/tracks/points.parquet` (see
+  decision log); voyage membership is attached on demand via `attach_voyage_ids` (ASOF JOIN against
+  `voyages.parquet`).
+- **Download/process/discard pipeline built (`pipeline/manifest.py`, `pipeline/backfill.py`).**
+  One day at a time: download → clean → verify retention ratio → discard the raw partition →
+  record state in `data/manifest.json` (tracked in git, atomic writes). Resumable, with a disk
+  guard (default 20 GB free) before each day. Only raw is discarded for now — cleaned days are kept
+  deliberately; see `docs/DECISIONS.md`.
+- **Phase 2's 30-day working window landed: 2024-06-01..2024-06-30, all 30 days cleaned, all 30
+  raw partitions discarded, ~14 GB on disk.** `process/identity` and `process/tracks` rebuilt over
+  the full range: 21,146 distinct MMSI, 4,881 with a valid IMO, 16,265 orphaned, **1 reused MMSI**
+  (0 on the single day — reuse only shows up across a longer range, as expected), 95,692 voyages.
+- **P2-1 done: the empirical coverage map (`detect/coverage.py`, `data/coverage/grid.parquet`).**
+  Receive probability per 0.1° grid cell and `ship_type`, from the ratio of short (≤30min) to long
+  gaps between a vessel's consecutive messages, each row carrying its build window and git SHA.
+  Built over the full 30-day range: 9,265 cells, 42,968 (cell, ship_type) estimates with ≥20 pairs.
+  **Flagged, not fully trustworthy yet** — see Open questions and `docs/DECISIONS.md`: the method
+  can't see true coverage holes (no message ⇒ no row) and a deliberate AIS shutdown depresses its
+  own cell's score, so 62.5% of estimates came back at exactly 1.0 and none below 0.5. Needs
+  cross-vessel corroboration (or similar) before P2-2 can trust a low score as "just bad coverage."
+- 97 tests passing, `ruff` clean across the repo (as of this session's close).
 
 ## In progress
 
@@ -36,44 +43,39 @@ _Last updated: 2026-09-16_
 
 ## Next up
 
-**Phase 2 (the five detectors) starts.** First task: **P2-1**, the empirical coverage map
-(receive-probability per sea grid cell and vessel class) — the core technical piece the other
-detectors lean on, especially P2-2 (deliberate gaps), which needs to tell "AIS off" apart from
-"outside receiver coverage."
-
-Before widening the date range for Phase 2 pathology variety (a few weeks, per
-`docs/DECISIONS.md`), note the disk constraint below — plan the download/process/discard cycle
-rather than accumulating raw days.
+**P2-2, detector 1: deliberate AIS gaps.** Before leaning on `detect/coverage.py`'s
+`coverage_probability` naively, address (or explicitly work around) the selection-bias/circularity
+limitation logged in `docs/DECISIONS.md` — a low score there does not yet safely mean "just bad
+coverage." One option worth trying first: cross-vessel corroboration (do *other* vessels report
+normally from a cell while this one is dark?) instead of a single vessel's own short/long ratio.
 
 ## Blocked
 
-- Nothing blocked.
+- Nothing hard-blocked. Soft-blocked: P2-2 depends on either fixing P2-1's coverage methodology or
+  deliberately designing around its documented bias — see Next up.
 
 ## Open questions
 
-- ~~Which date to use as the first sample day.~~ Decided: **2024-06-05**. See `docs/DECISIONS.md`.
-- ~~Whether the Danish HTTPS certificate issue requires a documented `verify=False` or plain
-  HTTP.~~ Superseded — the archive moved to S3, reached over verified HTTPS. See
-  `docs/DECISIONS.md`.
-- ~~Whether the real DMA file is `.zip` or `.csv`.~~ Decided: `.zip`, confirmed live.
-- ~~Whether the 71% orphaned-MMSI rate (no valid IMO) from P1-2 is a data quality problem.~~
-  Checked: no. Broken down by `ship_type`, orphaned MMSI is dominated by Sailing (98% orphaned) and
-  Pleasure (99% orphaned) — small craft with no IMO requirement. The classes that matter for
-  sanctions evasion are well covered: Tanker 97% have a valid IMO, Cargo 93%. Worth revisiting for
-  Detector 4 (P2-5): a Tanker/Cargo vessel *without* a valid IMO would be the anomaly worth flagging,
-  not the orphaned rate in general.
+- **Is P2-1's coverage-map methodology (self-referential short/long gap ratio) good enough to ship,
+  or does it need the cross-vessel-corroboration redesign before P2-2 is built on top of it?** Not
+  yet decided — flagged this session, see `docs/DECISIONS.md`.
 - **Meaning of the real schema's trailing `a, b, c, d` columns** (unlabelled in the source CSV,
   passed through untouched by every module so far) — likely AIS antenna/base-station diagnostic
   fields, not confirmed. Only worth resolving if a future detector needs them.
 - **Voyage gap threshold (6h default in `process/tracks.py`)** is a defensible but unvalidated
-  judgement call, not tuned against this project's own data. Revisit if Phase 2's gap detector
-  (P2-2) needs a specific value — it's a `gap_hours` parameter, not a hardcoded constant.
+  judgement call, not tuned against this project's own data. Revisit if P2-2 needs a specific value
+  — it's a `gap_hours` parameter, not a hardcoded constant.
+- **Whether the 30-day window needs extending for detector variety** (noisy P2-1 estimates, too few
+  ship-to-ship candidates for P2-4, only 1 reused MMSI for P2-5) — no signal either way yet since
+  no detector past P2-1 has been built. If so, extend with separate weeks spread across 2024 rather
+  than more contiguous June days (see `docs/DECISIONS.md`).
 
 ## Disk budget — read before downloading more days
 
-One raw day ≈ 507 MB (Parquet); one cleaned day ≈ 444 MB more. This machine had **~79 GB free**
-(of 931 GB) as of 2026-09-16 — continuous multi-year download does not fit (3 years ≈ 542 GB for
-raw alone). Phase 3-4's "years of depth" requirement (several validation cutoffs `T`, each needing
-data before and after) should be met by **sampling short windows around each cutoff**, not
-downloading every day — and by discarding raw/cleaned intermediates once aggregated into the
-(much smaller) vessel-month panel, rather than keeping years of raw positions on disk at once.
+**~73 GB free** (of 931 GB) as of 2026-09-17. `data/clean/` for the 30-day window is ~14 GB.
+`data/identity/`, `data/tracks/`, `data/coverage/` together are a few MB — the whole point of
+reducing to aggregates. One raw day ≈ 507 MB, discarded immediately after cleaning by
+`pipeline/backfill.py`. Phase 3-4's "years of depth" requirement (several validation cutoffs `T`,
+each needing data before and after) should still be met by **sampling short windows around each
+cutoff**, not downloading every day, and eventually by discarding cleaned days too once Phase 2's
+detectors exist to define what's safe to reduce them to (deferred, see `docs/DECISIONS.md`).

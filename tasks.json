@@ -1,6 +1,6 @@
 {
   "project": "maritime-fraud-signals",
-  "updated": "2026-09-16",
+  "updated": "2026-09-17",
   "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
   "tasks": [
     { "id": "P0-1", "phase": 0, "done": true,  "description": "Scaffold repository: layout, continuity files, subagents, commands" },
@@ -14,8 +14,9 @@
     { "id": "P1-3", "phase": 1, "done": true,  "description": "Reconstruct tracks per vessel and segment into voyages. process/tracks.py, 6h gap threshold (parameterized), validated against real day: 4,751 voyages" },
     { "id": "P1-4", "phase": 1, "done": true,  "description": "Unit tests with synthetic cases for each cleaning pathology. Satisfied by the test suites built alongside P1-1/P1-2/P1-3: 54 tests total, all passing" },
 
-    { "id": "P2-1", "phase": 2, "done": false, "description": "Empirical coverage map: receive probability per sea grid cell and vessel class. Core technical piece" },
-    { "id": "P2-2", "phase": 2, "done": false, "description": "Detector 1: deliberate AIS gaps. Output a probability, not a boolean" },
+    { "id": "P2-1", "phase": 2, "done": true,  "description": "Empirical coverage map: receive probability per sea grid cell and vessel class. detect/coverage.py, built over 2024-06-01..2024-06-30: 9,265 cells, 42,968 (cell, ship_type) estimates with >=20 pairs. FLAGGED: selection-bias/circularity in the short/long-gap-ratio method (62.5% of estimates are exactly 1.0, none below 0.5) -- see P2-1b and docs/DECISIONS.md" },
+    { "id": "P2-1b", "phase": 2, "done": false, "description": "Fix or deliberately work around P2-1's coverage-map bias before P2-2 relies on it: a pair only forms between two received messages, so true coverage holes are invisible and a deliberate AIS shutdown depresses its own cell's score. Try cross-vessel corroboration (do other vessels report normally from a cell while this one is dark?) or an equivalent fix" },
+    { "id": "P2-2", "phase": 2, "done": false, "description": "Detector 1: deliberate AIS gaps. Output a probability, not a boolean. Depends on P2-1b: do not naively read a low coverage_probability as 'just bad coverage, not evasion'" },
     { "id": "P2-3", "phase": 2, "done": false, "description": "Detector 2: position spoofing (impossible speeds, positions on land, synthetic circles, simultaneous positions)" },
     { "id": "P2-4", "phase": 2, "done": false, "description": "Detector 3: ship-to-ship transfers, using the GFW definition" },
     { "id": "P2-5", "phase": 2, "done": false, "description": "Detector 4: identity anomalies (flag, name, MMSI changes)" },

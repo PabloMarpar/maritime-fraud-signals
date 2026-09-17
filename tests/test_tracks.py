@@ -4,7 +4,7 @@ nothing here touches data/.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -41,12 +41,19 @@ def _write_clean_partition(root: Path, day: date, rows: list[tuple]) -> None:
         con.close()
 
 
-def _read_points(points_path: Path) -> list[tuple]:
+def _clean_glob(clean_root: Path) -> str:
+    return (clean_root / "*" / "*.parquet").as_posix()
+
+
+def _read_points_via_attach(clean_root: Path, voyages_path: Path) -> list[tuple]:
+    """Rebuild the old points.parquet shape on the fly via attach_voyage_ids, for assertions."""
     con = duckdb.connect()
     try:
+        clean_sql = f"SELECT * FROM read_parquet('{_clean_glob(clean_root)}')"
+        tracks.attach_voyage_ids(con, clean_sql, voyages_path)
         return con.execute(
-            f"SELECT mmsi, timestamp, latitude, longitude, voyage_seq, voyage_id "
-            f"FROM '{points_path.as_posix()}' ORDER BY mmsi, timestamp"
+            "SELECT mmsi, timestamp, latitude, longitude, voyage_seq, voyage_id "
+            "FROM points ORDER BY mmsi, timestamp"
         ).fetchall()
     finally:
         con.close()
@@ -77,9 +84,9 @@ def test_continuous_track_stays_one_voyage(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    points_path, voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    points = _read_points(points_path)
+    points = _read_points_via_attach(in_root, voyages_path)
     assert len(points) == 4
     assert {row[4] for row in points} == {1}  # voyage_seq
     assert {row[5] for row in points} == {"219000001-1"}  # voyage_id
@@ -100,9 +107,9 @@ def test_large_time_gap_splits_into_two_voyages(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    points_path, voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    points = _read_points(points_path)
+    points = _read_points_via_attach(in_root, voyages_path)
     voyage_seqs = [row[4] for row in points]
     assert voyage_seqs == [1, 1, 2, 2]
 
@@ -121,9 +128,9 @@ def test_gap_below_threshold_does_not_split(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    points_path, _voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    points = _read_points(points_path)
+    points = _read_points_via_attach(in_root, voyages_path)
     assert {row[4] for row in points} == {1}
 
 
@@ -137,11 +144,11 @@ def test_custom_gap_hours_overrides_default(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    points_path, _voyages_path = tracks.reconstruct_range(
+    voyages_path = tracks.reconstruct_range(
         DAY, DAY, in_root=in_root, out_root=out_root, gap_hours=1.0
     )
 
-    points = _read_points(points_path)
+    points = _read_points_via_attach(in_root, voyages_path)
     assert [row[4] for row in points] == [1, 2]
 
 
@@ -158,9 +165,9 @@ def test_multiple_vessels_segmented_independently(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    points_path, voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    points = _read_points(points_path)
+    points = _read_points_via_attach(in_root, voyages_path)
     vessel_a = [row for row in points if row[0] == 219000005]
     vessel_b = [row for row in points if row[0] == 219000006]
     assert [row[4] for row in vessel_a] == [1, 1, 2]
@@ -185,7 +192,7 @@ def test_voyage_summary_matches_input_exactly(tmp_path):
     _write_clean_partition(in_root, DAY, rows)
     out_root = tmp_path / "tracks"
 
-    _points_path, voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     voyages = _read_voyages(voyages_path)
     assert len(voyages) == 1
@@ -220,7 +227,7 @@ def test_voyage_spans_a_day_boundary(tmp_path):
     _write_clean_partition(in_root, DAY2, [(219000008, _ts(1, 0, day=DAY2), 55.1, 12.1)])
     out_root = tmp_path / "tracks"
 
-    _points_path, voyages_path = tracks.reconstruct_range(DAY, DAY2, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY2, in_root=in_root, out_root=out_root)
 
     voyages = _read_voyages(voyages_path)
     assert len(voyages) == 1
@@ -251,20 +258,17 @@ def test_reconstruct_range_raises_when_no_partitions_exist(tmp_path):
 
 
 def test_reconstruct_range_is_idempotent_by_default(tmp_path):
-    """Re-running without force must not rebuild the outputs."""
+    """Re-running without force must not rebuild the output."""
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000010, _ts(0, 0), 55.0, 12.0)])
     out_root = tmp_path / "tracks"
 
-    points_first, voyages_first = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
-    points_mtime = points_first.stat().st_mtime_ns
+    voyages_first = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
     voyages_mtime = voyages_first.stat().st_mtime_ns
 
-    points_second, voyages_second = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_second = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    assert points_second == points_first
     assert voyages_second == voyages_first
-    assert points_second.stat().st_mtime_ns == points_mtime, "re-running without --force must not rewrite the file"
     assert voyages_second.stat().st_mtime_ns == voyages_mtime, "re-running without --force must not rewrite the file"
 
 
@@ -274,11 +278,8 @@ def test_reconstruct_range_force_rebuilds(tmp_path):
     out_root = tmp_path / "tracks"
 
     tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
-    points_path, voyages_path = tracks.reconstruct_range(
-        DAY, DAY, in_root=in_root, out_root=out_root, force=True
-    )
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root, force=True)
 
-    assert points_path.exists()
     assert voyages_path.exists()
 
 
@@ -288,9 +289,85 @@ def test_single_point_voyage_has_zero_duration(tmp_path):
     _write_clean_partition(in_root, DAY, [(219000012, _ts(5, 0), 55.0, 12.0)])
     out_root = tmp_path / "tracks"
 
-    _points_path, voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    voyages_path = tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     voyages = _read_voyages(voyages_path)
     assert len(voyages) == 1
     assert voyages[0][9] == 1  # point_count
     assert voyages[0][10] == 0  # duration_seconds
+
+
+def test_points_parquet_is_not_written(tmp_path):
+    """Negative case for the ASOF-join-on-demand redesign: no points.parquet is ever written."""
+    in_root = tmp_path / "clean" / "ais_dk"
+    _write_clean_partition(in_root, DAY, [(219000013, _ts(0, 0), 55.0, 12.0)])
+    out_root = tmp_path / "tracks"
+
+    tracks.reconstruct_range(DAY, DAY, in_root=in_root, out_root=out_root)
+
+    assert not (out_root / "points.parquet").exists()
+
+
+def test_attach_voyage_ids_matches_original_segmentation_across_days_and_gaps(tmp_path):
+    """Equivalence: attach_voyage_ids' ASOF join reproduces the exact per-point voyage
+    assignment that the internal lag()-based segmentation used to write to points.parquet.
+
+    Covers a voyage crossing midnight (mmsi A) and a gap larger than gap_hours splitting
+    one mmsi's track into two voyages (mmsi B), the two structural cases called out in the
+    module docstring for attach_voyage_ids/reconstruct_range.
+    """
+    in_root = tmp_path / "clean" / "ais_dk"
+    mmsi_a = 219000020  # crosses the DAY/DAY2 midnight boundary, one continuous voyage
+    mmsi_b = 219000021  # a >6h gap on DAY splits it into two voyages
+
+    _write_clean_partition(
+        in_root,
+        DAY,
+        [
+            (mmsi_a, _ts(23, 0, day=DAY), 55.0, 12.0),
+            (mmsi_b, _ts(0, 0, day=DAY), 56.0, 13.0),
+            (mmsi_b, _ts(0, 10, day=DAY), 56.01, 13.01),
+            (mmsi_b, _ts(12, 0, day=DAY), 56.5, 13.5),  # >6h gap: new voyage
+        ],
+    )
+    _write_clean_partition(
+        in_root,
+        DAY2,
+        [
+            (mmsi_a, _ts(1, 0, day=DAY2), 55.1, 12.1),  # still mmsi_a's first voyage
+        ],
+    )
+    out_root = tmp_path / "tracks"
+
+    voyages_path = tracks.reconstruct_range(DAY, DAY2, in_root=in_root, out_root=out_root)
+
+    # Expected mapping derived independently from voyages.parquet: for each point, the
+    # voyage whose [start_time, end_time] window contains it (voyages don't overlap, so
+    # this is unambiguous without needing the ASOF logic itself).
+    voyages = _read_voyages(voyages_path)
+    expected_by_key: dict[tuple[int, datetime], tuple[int, str]] = {}
+    con = duckdb.connect()
+    try:
+        all_points = con.execute(
+            f"SELECT mmsi, timestamp FROM read_parquet('{_clean_glob(in_root)}') ORDER BY mmsi, timestamp"
+        ).fetchall()
+    finally:
+        con.close()
+    for mmsi, ts in all_points:
+        candidates = [
+            (v[1], v[2]) for v in voyages if v[0] == mmsi and v[3] <= ts <= v[4] + timedelta(seconds=1)
+        ]
+        assert len(candidates) == 1, f"expected exactly one voyage window for {mmsi}@{ts}"
+        expected_by_key[(mmsi, ts)] = candidates[0]
+
+    points = _read_points_via_attach(in_root, voyages_path)
+    assert len(points) == len(all_points)  # every point lands in exactly one voyage
+    for mmsi, ts, _lat, _lon, voyage_seq, voyage_id in points:
+        assert (voyage_seq, voyage_id) == expected_by_key[(mmsi, ts)]
+
+    # Structural sanity: mmsi_a's track really did stay one voyage across the boundary,
+    # and mmsi_b's really did split into two.
+    a_seqs = {row[4] for row in points if row[0] == mmsi_a}
+    b_seqs = {row[4] for row in points if row[0] == mmsi_b}
+    assert a_seqs == {1}
+    assert b_seqs == {1, 2}

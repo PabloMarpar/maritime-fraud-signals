@@ -43,6 +43,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # this image reproduces, so it is intentionally left out.
 COPY ingest/ ingest/
 COPY process/ process/
+COPY pipeline/ pipeline/
 COPY detect/ detect/
 COPY features/ features/
 COPY model/ model/
