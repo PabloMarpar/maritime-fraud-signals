@@ -61,18 +61,34 @@ _Last updated: 2026-09-17_
 - **P2-3 done: detector 2, position spoofing (`detect/spoofing.py`, `data/detect/spoofing.parquet`).**
   Four independent rule-based checks over clean AIS, merged into one flat table (one row per
   detected event, not per vessel, mirroring P2-2's own output shape): **impossible speed**
-  (consecutive same-mmsi pairs implying >50kn via great-circle distance/time), **on land**
-  (point-in-polygon against a new land mask, eroded ~1.1km inward to absorb the mask's own
-  coastline-generalization error), **synthetic circles** (a Kasa algebraic circle fit per voyage —
-  candidates pre-filtered cheaply by point count/duration before any raw points are pulled — flagged
-  on tight residual/radius plus a wide angular sweep), and **simultaneous positions** (same mmsi and
-  timestamp, positions too far apart for one transponder). New supporting module
-  `ingest/landmask.py` downloads and lands Natural Earth's land polygons once
+  (consecutive same-mmsi pairs implying >50kn via great-circle distance/time, only for pairs ≥60s
+  apart), **on land** (point-in-polygon against a new land mask, eroded ~1.1km inward to absorb the
+  mask's own coastline-generalization error), **synthetic circles** (a Kasa algebraic circle fit per
+  voyage, done as bulk grouped SQL aggregation, not one query per voyage), and **simultaneous
+  positions** (same mmsi and timestamp, positions too far apart for one transponder). New supporting
+  module `ingest/landmask.py` downloads and lands Natural Earth's land polygons once
   (`data/reference/land.parquet`) — see `docs/DATA_SOURCES.md`. 23 new tests (163 total), `ruff`
-  clean. Every threshold in this detector (speed ceiling, erosion buffer, circle-fit gates,
-  simultaneous-position distance) is an unvalidated default, same posture as P2-2's. **Not yet run
-  against real data**, and the on-land spatial join's performance at the full 30-day scale has not
-  been benchmarked — both outstanding, see Next up.
+  clean. Every threshold in this detector is an unvalidated default, same posture as P2-2's.
+- **Three real-data bugs found and fixed in `detect/spoofing.py` this session, all from actually
+  running it against the real 30-day window, not from review** (see `docs/DECISIONS.md`):
+  1. `check_on_land`'s bounding-box crop (added to make the land join fast) used raw min/max, which
+     a handful of corrupted real positions (963 of 10.4M points on one real day, up to 89°
+     latitude — `process.clean` does not catch these) blew up to cover most of the Northern
+     Hemisphere, defeating the crop entirely (a 30-day run did not finish in over 80 minutes).
+     Fixed with tail quantiles (0.1% each side) instead of min/max, plus a geometry-simplify pass.
+  2. `check_synthetic_circles`'s original per-voyage Python loop never finished either: 68,431 of
+     95,692 real voyages passed the point_count/duration pre-filter alone (345 million points
+     total) — AIS reporting is frequent enough that "most voyages are short" (the original
+     assumption) is false on real data. Rewritten as two bulk grouped SQL passes (moment sums for
+     the Kasa fit, then a second pass scoped to survivors only) so no raw points leave DuckDB;
+     angular spread is now a mean resultant length (a standard circular-statistics measure,
+     SQL-aggregable) instead of a per-point unwrapped sweep.
+  3. `check_impossible_speed` flagged 31% of the entire 30-day dataset before a fix — 98.2% of one
+     real day's flagged pairs had a time gap under 10 seconds, where ordinary GPS jitter divided by
+     a near-zero interval trivially implies "impossible" speed. Added a 60s minimum-interval gate;
+     the same day's flags dropped from 76,970 to 167.
+  Each fix is a real behavioural change (not just a speedup), so **the real 30-day run must be
+  redone from scratch** with the fixed code — see In progress / Next up.
 - 163 tests passing, `ruff` clean across the repo (as of this session's close).
 
 - **`detect.gaps` run over the real 30-day window (2024-06-01..2024-07-01), sanity-checked.**
@@ -91,18 +107,26 @@ _Last updated: 2026-09-17_
   >500h, close to the full 720h window) likely reflects vessels with very sparse reporting overall
   (few voyages total) rather than one genuine multi-day evasion each — a data-quality nuance to
   keep in mind before reading those specific rows as strong fraud signal.
-- 163 tests passing, `ruff` clean across the repo (as of this session's close).
 
 ## In progress
 
-- Nothing running right now.
+- **`detect.spoofing.build_spoofing_events` over the real 2024-06-01..2024-06-30 window, stopped
+  mid-run by request, to resume next session.** Re-run from scratch with:
+  `python -m detect.spoofing --start 2024-06-01 --end 2024-06-30 --force` (the land mask already
+  exists at `data/reference/land.parquet`, no need to rebuild it). With all three fixes above, the
+  `impossible_speed` check finished the real run in 72s (8,217 events — sane, down from 3.2M before
+  the fix). The `on_land` check was ~30-35 min at a one-real-day-measured rate (68s/day after the
+  quantile-bbox + simplify fix) when stopped; `synthetic_circle` and `simultaneous_position` had not
+  started. Per-check progress now logs as each one finishes (not just a final summary), so a
+  background run can be watched without guessing which stage it's in. **Budget at least an hour for
+  this to finish**, and sanity-check the output the same way `detect.gaps` was checked (verdict/kind
+  breakdown, does anything look implausibly common) before trusting it — the `on_land` count on one
+  real day (277,788 of 10.4M positions, 2.7%) has NOT been sanity-checked against docked/anchored
+  vessel share yet, and could turn out to need the same kind of fix the other two checks did.
 
 ## Next up
 
-1. **Run `detect.spoofing.build_spoofing_events` over the same real window** and sanity-check its
-   output — first checking whether the on-land join is actually fast enough at real scale (millions
-   of points) before assuming it is; `detect.gaps`'s real run above took much longer than expected,
-   so budget time for this one too.
+1. **Finish the `detect.spoofing` real run above and sanity-check it.**
 2. After that's sanity-checked, **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is
    next in `tasks.json`.
 
@@ -112,6 +136,11 @@ _Last updated: 2026-09-17_
 
 ## Open questions
 
+- **`detect.spoofing`'s `on_land` rate on one real day was 2.7% of all positions (277,788 of 10.4M),
+  not yet sanity-checked against how much of that is plausible (docked/anchored vessels near a
+  coastline the eroded mask still catches) versus a sign this check also needs a fix**, the way the
+  other two did. Check this once the full real run (see In progress) finishes and before trusting
+  `on_land` events downstream.
 - **`detect/gaps.py`'s verdict→probability table (0.9/0.15/0.5) and the 12h clamp band ([0.4, 0.6])
   are unvalidated guesses**, never checked against any labelled case (the real 30-day run only
   confirmed the code runs correctly and the clamp fires where expected, not that the numbers are

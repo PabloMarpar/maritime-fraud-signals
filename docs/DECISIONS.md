@@ -238,10 +238,10 @@ _2026-09-17_
   that false-positive direction, which was judged the safer failure mode for a fraud-flagging
   detector. Unvalidated size, sized to the one measured offset, not a systematic study.
 - **The synthetic-circle check uses a Kasa algebraic circle fit (linear least squares), not a full
-  nonlinear geometric fit.** Reason: it reduces to a single `numpy.linalg.lstsq` call and is
+  nonlinear geometric fit.** Reason: it reduces to a solvable 3x3 normal-equation system and is
   standard practice for this kind of flagging heuristic; it is known to be biased for partial arcs
-  or noisy data relative to a nonlinear fit, which is why the detector also gates on angular sweep
-  (>=180°) and a radius band, not on residual ratio alone — a tight algebraic fit over a short,
+  or noisy data relative to a nonlinear fit, which is why the detector also gates on a radius band
+  and angular spread, not on residual ratio alone — a tight algebraic fit over a short,
   nearly-straight arc would otherwise still look deceptively "circular".
 - **Detector output for both P2-2 and P2-3 is one row per detected event, not one row per vessel or
   vessel-month.** Reason: keeps each detector a pure, inspectable function of the evidence it found,
@@ -249,3 +249,30 @@ _2026-09-17_
   explicitly deferred to the not-yet-built `features/` module (Phase 2's own task list), which can
   choose how to combine multiple events/confidences without the detectors needing to agree on that
   now.
+- **`detect.spoofing`'s `check_synthetic_circles` computes the Kasa fit's moment sums (and the
+  residual/angular-spread stats) as bulk grouped SQL aggregates, not by pulling each voyage's raw
+  points into Python one at a time.** Reason: the original per-voyage version assumed "most voyages
+  are short and never reach this check" — false on real data (68,431 of 95,692 real voyages passed
+  the pre-filter, 345M points total), so it never finished a real 30-day run. Only ~9 numbers per
+  voyage (not the points) ever leave DuckDB now, in two passes (fit + radius gate first, then
+  residual/spread only for survivors).
+- **Angular coverage for the circle check is measured as mean resultant length (a standard
+  circular-statistics dispersion measure), not a per-point unwrapped angular sweep.** Reason: the
+  bulk-SQL rewrite above needs a measure computable as an aggregate (`sum(cos(theta))`,
+  `sum(sin(theta))`) without per-point ordering/unwrapping. `MAX_CIRCLE_MEAN_RESULTANT_LENGTH = 0.6`
+  is pinned close to the value for a uniform 180° arc (`2/pi ≈ 0.637`) so it's a like-for-like
+  replacement of the old >=180° gate, not an independent guess — verified against a synthetic
+  half-circle case that it correctly does not flag.
+- **`detect.spoofing`'s land-polygon bounding-box crop uses tail quantiles (0.1% each side) of the
+  data's own lat/lon, not raw min/max.** Reason: a real clean day contained 963 of 10.4M points
+  (0.0092%) with corrupted coordinates up to 89° latitude, which `process.clean`'s existing rules
+  don't catch — a min/max bbox over that data covered most of the Northern Hemisphere and defeated
+  the crop entirely (a 30-day run didn't finish in over 80 minutes). Quantiles ignore that handful
+  of outliers while staying data-driven (works for a future non-Danish working region too); the
+  tiny fraction of genuinely corrupted points outside the box simply never get an on-land verdict.
+- **`check_impossible_speed` requires a minimum 60-second gap between a pair before evaluating
+  implied speed (`MIN_SPEED_CHECK_INTERVAL_SECONDS`).** Reason: without it, the check flagged 31%
+  of the entire real 30-day dataset — 98.2% of one real day's flagged pairs had a time gap under 10
+  seconds, where ordinary GPS/positional jitter of a few dozen metres is amplified into an
+  "impossible" speed by dividing by a near-zero interval. At 60s+ the same day's flags dropped from
+  76,970 to 167, two orders of magnitude fewer and a plausible rate for a real anomaly signal.
