@@ -49,11 +49,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import duckdb
+
+from process.partitions import existing_partitions
 
 logger = logging.getLogger(__name__)
 
@@ -78,38 +79,6 @@ AND (
     = CAST(substr(imo, 7, 1) AS INTEGER)
 )
 """
-
-
-def _daterange(start: date, end: date) -> Iterator[date]:
-    """Yield each date from start to end, inclusive."""
-    current = start
-    while current <= end:
-        yield current
-        current += timedelta(days=1)
-
-
-def _partition_path(day: date, root: Path) -> Path:
-    """Hive-style partition path for one day, e.g. .../date=2024-06-05/part-0.parquet."""
-    return root / f"date={day.isoformat()}" / "part-0.parquet"
-
-
-def _existing_partitions(start: date, end: date, in_root: Path) -> list[tuple[date, Path]]:
-    """Return (day, path) for every day in [start, end] whose clean partition exists.
-
-    Missing days are logged and skipped rather than raising: unlike
-    clean_day's raw-to-clean step (one input, one output, either it's there
-    or it's a bug), resolving identity over a range is meant to work with
-    whatever has been cleaned so far -- the range is a request, not a
-    guarantee every day in it has been ingested yet.
-    """
-    found = []
-    for day in _daterange(start, end):
-        path = _partition_path(day, in_root)
-        if path.exists():
-            found.append((day, path))
-        else:
-            logger.warning("No clean partition for %s at %s, skipping", day.isoformat(), path)
-    return found
 
 
 def _resolve(con: duckdb.DuckDBPyConnection, partitions: list[tuple[date, Path]]) -> None:
@@ -189,7 +158,7 @@ def resolve_range(
     clean partition exists anywhere in the requested range (an empty result
     would silently look like "nothing to see here" rather than "nothing was
     read"); a partial range with some days missing only warns, see
-    _existing_partitions.
+    process.partitions.existing_partitions.
     """
     if out_path.exists() and not force:
         logger.info(
@@ -197,7 +166,7 @@ def resolve_range(
         )
         return out_path
 
-    partitions = _existing_partitions(start, end, in_root)
+    partitions = existing_partitions(start, end, in_root)
     if not partitions:
         raise FileNotFoundError(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under {in_root}"

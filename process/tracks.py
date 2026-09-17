@@ -57,11 +57,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import duckdb
+
+from process.partitions import existing_partitions
 
 logger = logging.getLogger(__name__)
 
@@ -72,36 +73,6 @@ VOYAGES_PATH = TRACKS_ROOT / "voyages.parquet"
 # Default voyage-boundary gap: see module docstring for the reasoning.
 # Callers (library or CLI) may override this per run.
 DEFAULT_GAP_HOURS = 6.0
-
-
-def _daterange(start: date, end: date) -> Iterator[date]:
-    """Yield each date from start to end, inclusive."""
-    current = start
-    while current <= end:
-        yield current
-        current += timedelta(days=1)
-
-
-def _partition_path(day: date, root: Path) -> Path:
-    """Hive-style partition path for one day, e.g. .../date=2024-06-05/part-0.parquet."""
-    return root / f"date={day.isoformat()}" / "part-0.parquet"
-
-
-def _existing_partitions(start: date, end: date, in_root: Path) -> list[tuple[date, Path]]:
-    """Return (day, path) for every day in [start, end] whose clean partition exists.
-
-    Mirrors ``process.identity``'s helper of the same name: a missing day is
-    logged and skipped, not fatal, since reconstructing tracks over a range
-    is meant to work with whatever has been cleaned so far.
-    """
-    found = []
-    for day in _daterange(start, end):
-        path = _partition_path(day, in_root)
-        if path.exists():
-            found.append((day, path))
-        else:
-            logger.warning("No clean partition for %s at %s, skipping", day.isoformat(), path)
-    return found
 
 
 def _reconstruct(
@@ -180,9 +151,9 @@ def reconstruct_range(
     Idempotent: if the output file already exists, this is a no-op unless
     force=True. Returns voyages_path either way. Raises FileNotFoundError if
     no clean partition exists anywhere in the requested range; a partial
-    range with some days missing only warns, see _existing_partitions.
-    Because of the cross-date design (see module docstring), there is
-    deliberately no ``reconstruct_day``.
+    range with some days missing only warns, see
+    process.partitions.existing_partitions. Because of the cross-date design
+    (see module docstring), there is deliberately no ``reconstruct_day``.
     """
     voyages_path = out_root / "voyages.parquet"
     if voyages_path.exists() and not force:
@@ -192,7 +163,7 @@ def reconstruct_range(
         )
         return voyages_path
 
-    partitions = _existing_partitions(start, end, in_root)
+    partitions = existing_partitions(start, end, in_root)
     if not partitions:
         raise FileNotFoundError(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under {in_root}"
