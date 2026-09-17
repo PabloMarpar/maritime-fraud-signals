@@ -31,11 +31,23 @@ _Last updated: 2026-09-17_
   Receive probability per 0.1° grid cell and `ship_type`, from the ratio of short (≤30min) to long
   gaps between a vessel's consecutive messages, each row carrying its build window and git SHA.
   Built over the full 30-day range: 9,265 cells, 42,968 (cell, ship_type) estimates with ≥20 pairs.
-  **Flagged, not fully trustworthy yet** — see Open questions and `docs/DECISIONS.md`: the method
-  can't see true coverage holes (no message ⇒ no row) and a deliberate AIS shutdown depresses its
-  own cell's score, so 62.5% of estimates came back at exactly 1.0 and none below 0.5. Needs
-  cross-vessel corroboration (or similar) before P2-2 can trust a low score as "just bad coverage."
-- 97 tests passing, `ruff` clean across the repo (as of this session's close).
+  **Superseded by P2-1b as the coverage-vs-evasion signal** — `coverage_probability` had no
+  discriminative range (62.5% of estimates exactly 1.0, none below 0.5). `grid.parquet` and the
+  score itself are retired; `detect/coverage.py`'s code is untouched pending a future session that
+  repurposes it to emit reporting-cadence percentiles instead (Tramo B, not yet started).
+- **P2-1b done: cross-vessel corroboration (`detect/liveness.py`, `data/coverage/liveness.parquet`).**
+  A tri-state verdict (`receiver_alive` / `area_dark` / `no_evidence`) for a silence: was some
+  *other* vessel heard nearby, leave-one-out applied to both the concurrent count and the
+  historical baseline (so a vessel can't exonerate itself with its own record). An `analyst-review`
+  pass on the first draft caught three real bugs before anything was built on it — wrong baseline
+  denominator, a vessel-hours/distinct-vessels unit mismatch letting one recurring vessel justify
+  `area_dark`, and a returned field leaking post-window data — all fixed; see `docs/DECISIONS.md`
+  for the full list and the fixes. Validated on the full real 30-day window, all 11,556 scoreable
+  gaps (not a sample): 85.0/2.5/12.5% split; a duration-matched placebo control clears the
+  pre-registered falsification bar for short-to-medium gaps (+19.0/+16.6 points) but only weakly
+  for 12h+ gaps (+6.4 points) — **the signal is validated for short-to-medium AIS gaps, not for
+  very long ones**, P2-2 must not lean on it alone there.
+- 126 tests passing, `ruff` clean across the repo (as of this session's close).
 
 ## In progress
 
@@ -43,22 +55,26 @@ _Last updated: 2026-09-17_
 
 ## Next up
 
-**P2-2, detector 1: deliberate AIS gaps.** Before leaning on `detect/coverage.py`'s
-`coverage_probability` naively, address (or explicitly work around) the selection-bias/circularity
-limitation logged in `docs/DECISIONS.md` — a low score there does not yet safely mean "just bad
-coverage." One option worth trying first: cross-vessel corroboration (do *other* vessels report
-normally from a cell while this one is dark?) instead of a single vessel's own short/long ratio.
+**P2-2, detector 1: deliberate AIS gaps.** `detect.liveness.liveness_verdict` is ready to call.
+Known constraint to design around: the corroboration signal is validated for short-to-medium gaps
+but weak for 12h+ gaps (see `docs/DECISIONS.md`) — very long silences need either a different
+signal alongside it or an explicit "low confidence" treatment, not a naive read of the verdict.
 
 ## Blocked
 
-- Nothing hard-blocked. Soft-blocked: P2-2 depends on either fixing P2-1's coverage methodology or
-  deliberately designing around its documented bias — see Next up.
+- Nothing blocked.
 
 ## Open questions
 
-- **Is P2-1's coverage-map methodology (self-referential short/long gap ratio) good enough to ship,
-  or does it need the cross-vessel-corroboration redesign before P2-2 is built on top of it?** Not
-  yet decided — flagged this session, see `docs/DECISIONS.md`.
+- **`MIN_EXPECTED_CORROBORATORS` (3.0) and `MIN_BASELINE_VESSELS` (3) in `detect/liveness.py` are
+  unvalidated defaults**, the same posture `detect/coverage.py`'s retired threshold had. Revisit if
+  P2-2's output looks miscalibrated at the boundary between `area_dark` and `no_evidence`.
+- **`exclude_mmsi` in `liveness_verdict` accepts a sequence but nothing yet resolves *which* MMSIs
+  are the same vessel.** A vessel that reuses or spoofs a second MMSI could still build its own
+  `area_dark` baseline under the other identity. Relevant once P2-5 (identity anomalies) exists;
+  not a P2-2 blocker today given only 1 reused MMSI has been found in this window.
+- Tramo B (`detect/coverage.py` → `cadence.parquet`, reporting-interval percentiles instead of the
+  retired coverage score) is planned but not started.
 - **Meaning of the real schema's trailing `a, b, c, d` columns** (unlabelled in the source CSV,
   passed through untouched by every module so far) — likely AIS antenna/base-station diagnostic
   fields, not confirmed. Only worth resolving if a future detector needs them.

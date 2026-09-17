@@ -30,6 +30,23 @@ the system anticipates official designations rather than memorising them.
 
 Calibration is reported explicitly — a score of 0.8 must be right about 80% of the time.
 
+## Limitations
+
+**Label bias.** Sanctioned vessels are the ones that were *caught*, not all offenders. A model
+trained on designations learns the sanctioning bodies' own targeting priorities — flag, trade
+route, ownership nationality, political salience — at least as much as it learns evasive
+manoeuvring. A high score may mean "this vessel resembles vessels regulators choose to
+designate", not "this vessel is evading". Forward-looking validation (above) tests whether the
+system anticipates designations; it does not, on its own, correct for the fact that the target
+being anticipated is itself a selection process.
+
+**What a corroboration verdict does and does not mean.** The AIS-gap detector judges a silence by
+asking whether *other* vessels were heard nearby at the time (`detect/liveness.py`). All three
+possible verdicts are conditioned on there having been some vessel in the area to be heard at all:
+"the receiver was working" is inferred from "traffic happened to be there", and "a receiver outage
+is plausible" is inferred from "the area is normally busy but nobody happened by". Neither is
+ground truth for what the receiver could actually hear at the moment in question.
+
 ## Data sources
 
 All open, free, and publicly documented. See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).

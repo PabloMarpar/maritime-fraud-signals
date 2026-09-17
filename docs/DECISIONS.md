@@ -117,3 +117,87 @@ _2026-09-17_
   default lands on the same drive being guarded but outside where the guard measures unless told
   otherwise; without this the disk check could pass while the actual download (a transient
   multi-GB zip+CSV) fills the same volume elsewhere.
+
+_2026-09-17_
+
+- **P2-1b done: `detect/liveness.py` replaces `grid.parquet`'s gap-ratio `coverage_probability`
+  as the primary signal for judging AIS silences.** Cross-vessel corroboration, not a vessel's own
+  gap ratio: for a set of cells and a time window, was some *other* vessel heard there (leave one
+  out on the vessel under scoring)? A tri-state verdict (`receiver_alive` / `area_dark` /
+  `no_evidence`) replaces a single score, so "no data" is never confused with "low coverage". The
+  historical baseline is also leave-one-out — not just the concurrent corroboration count — or a
+  vessel that is the sole historical occupant of a quiet corridor would exonerate itself using its
+  own record, reproducing one level up the exact circularity this module exists to escape.
+  `coverage_probability` and `grid.parquet` are retired outright (not kept as a secondary signal):
+  it estimates the wrong quantity, and empirically has no discriminative range (62.5% of estimates
+  exactly 1.0, none below 0.5, over the 30-day window) — a constant with noise, not fit to survive
+  into a future model's feature vector. `detect/coverage.py` itself is untouched pending a Tramo B
+  session that repurposes it to emit reporting-cadence percentiles instead (still useful, unaffected
+  by the selection-bias critique since it conditions on "heard at all", which is the honest reading).
+- **`_daterange`/`_partition_path`/`_existing_partitions`, byte-identical across
+  `process/identity.py`, `process/tracks.py` and `detect/coverage.py`, extracted to
+  `process/partitions.py`** before `detect/liveness.py` became a fourth copy.
+- **An `analyst-review` pass on the first working version of `detect/liveness.py` found three real
+  correctness bugs, not just polish, before anything was built on top of it — logged here in full
+  because the fixes changed the module's numbers materially:**
+  1. *Wrong baseline denominator.* The expected-corroborators rate divided by a hardcoded
+     `baseline_days * 24` (720 hours) regardless of how much of that period the built
+     `liveness.parquet` actually covered. A gap early in a 30-day build window (e.g. June 3) has a
+     nominal 30-day lookback of which only 1-2 days exist, so real evidence was diluted by up to
+     30x. Fixed by reading the built table's own `window_start`/`window_end` provenance and using
+     the actual overlap as the denominator (`LivenessVerdict.baseline_hours_available`). Measured
+     on the real data: this quantity ranges from 24 hours (a gap on June 2) to 696 hours (a gap
+     near the end of June), never the hardcoded 720 — confirming the bug was live, not theoretical.
+  2. *Units mismatch enabling a new self-exoneration path.* The baseline counted vessel-*hours*
+     (rows), while the corroboration count is distinct *vessels* — so a single vessel reporting
+     continuously for the whole baseline accumulated "evidence" just as fast as several different
+     vessels passing through, and could alone justify `area_dark` for a *different* vessel's
+     silence. Fixed with an added gate, `min_baseline_vessels` (default 3, a separate parameter
+     from `min_expected`): `area_dark` now requires breadth (multiple distinct historical
+     occupants), not just volume from one recurring source. Regression test:
+     `test_single_recurring_vessel_does_not_trigger_area_dark`.
+  3. *`n_cell_hours_scanned` leaked post-window data.* The field counted distinct hours across the
+     vessel-cell join with no time bound at all, so it silently included hours after the window
+     being scored — a temporal-leakage bug in a returned field, on a module whose whole purpose is
+     leakage-free infrastructure. Fixed by bounding the query to `< window_end + 1h`. Also
+     documented explicitly (module docstring): a `LivenessVerdict` reflects evidence available at
+     `window_end`, not `as_of` — a caller attaching it to a temporally-cut-off panel must stamp it
+     with `max(window_end, as_of)`, or it will credit an earlier period with information that only
+     existed once the gap closed.
+  - Also fixed: `test_area_dark_baseline_also_excludes_self`'s original fixture used a 2-hour
+    window in which `area_dark` was mathematically unreachable regardless of leave-one-out (max
+    possible `expected_corroborators` from one vessel over 2h was always < the 3.0 threshold), so
+    the test passed without ever exercising the claim in its name. Rewritten with a fixture proven
+    (by a second assertion in the same test) capable of `area_dark`, so the sole-occupant case's
+    `no_evidence` result is evidence of the guard working, not of the mechanism being unreachable.
+  - `exclude_mmsi` widened to accept a sequence, not just one mmsi: an MMSI is a radio identity,
+    not a hull, and P2-5 will eventually need to exclude a set of MMSIs linked to one vessel. Not
+    implemented here (this module does no identity resolution), only made possible for the caller.
+  - The Poisson-derived "~5% false-negative rate" claim for `min_expected=3.0` was removed from the
+    docstring: it doesn't survive the units-mismatch finding above, and was never independently
+    validated. `min_expected` and `min_baseline_vessels` are documented as tunable defaults pending
+    calibration, the same posture the project already takes with `detect/coverage.py`'s thresholds.
+- **Validation run against the full, real 2024-06-01..06-30 window — all 11,556 scoreable
+  Tanker/Cargo AIS gaps >=2h (533 of 12,089 skipped for lacking any baseline day), not a subsample.**
+  (An earlier sampled run is superseded and not reported here: `random.sample` over an unordered
+  DuckDB fetch does not produce a reproducible sample, and scoring the full population removed the
+  need for sampling at all — it completed in ~11 minutes.)
+  - Headline split: **receiver_alive 85.0%, area_dark 2.5%, no_evidence 12.5%.** Within the
+    pre-registered non-damning range (not >95% receiver_alive, not <40%, not >30% no_evidence).
+  - By duration: receiver_alive rises monotonically with gap length (75.5% at 2-4h, 81.3% at
+    4-12h, 92.2% at 12h+). Reported for a sanity check only, **not as evidence the method works**:
+    for any positive traffic rate, P(at least one corroborator) rises with window length by
+    construction, so this shape is mechanically guaranteed and would appear even for a detector
+    doing nothing useful.
+  - **Duration-matched placebo control** (a same-vessel-population continuous-reporting instance,
+    scored as if it were a silence of the matching length, per bucket): delta (placebo minus real)
+    receiver_alive is **+19.0 points at 2-4h, +16.6 at 4-12h, but only +6.4 at 12h+** — below the
+    10-point bar set in advance for "the method is doing real work". Read plainly: the
+    corroboration signal discriminates a genuine silence from routine reporting well for short
+    gaps, but far more weakly for 12h+ gaps, where both real and placebo verdicts are pushed close
+    to saturation (>90% `receiver_alive`) simply because the window is long. **P2-2 should not
+    treat `receiver_alive`/`area_dark` on very long gaps as strong evidence**; the corroboration
+    signal's usable range is short-to-medium gaps, and this needs to be revisited if P2-2 leans on
+    long gaps specifically (e.g. multi-day AIS-off stretches).
+  - Gate correctness: every `area_dark` verdict had `n_baseline_vessels >= 3` (0 violations) —
+    confirms the breadth gate from fix #2 above is wired correctly, not just present in the code.
