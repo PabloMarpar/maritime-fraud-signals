@@ -35,10 +35,13 @@ out over real water -- the land polygons are eroded inward by :data:`COASTAL_ERO
 before containment is tested, so only positions solidly inland are flagged. This is a per-point
 check over every clean message (not per-pair), so a vessel that spends real time at a berth near a
 river mouth can produce many "on_land" rows for one stay -- expected, not deduplicated, because
-this check does not know about voyages. **Not yet benchmarked**: the spatial join's performance over
-a full multi-million-row 30-day window has not been measured. Flagged here explicitly as a thing to
-check before a real run, not silently assumed fast; no bounding-box pre-filtering has been added,
-since that would be optimizing a problem that has not actually been observed yet.
+this check does not know about voyages. **Benchmarked the hard way**: an earlier version tested
+every point against the raw land polygons directly, including Natural Earth's single
+whole-world-coastline multipolygon -- a real 30-day run did not finish in over 80 minutes before
+being killed. The fix, in :func:`check_on_land`, crops every land polygon to the data's own bounding
+box (plus a small margin) *before* eroding it, so ``ST_Contains`` never tests a point against a
+shape sized to the entire globe. This changes nothing about which points get flagged -- the crop
+happens well outside any area a Danish AIS point could be in -- only how fast it runs.
 
 **Check 3: synthetic circles.** Some spoofing rigs replay a perfect geometric loop instead of a
 real track. Candidate voyages are pre-filtered cheaply from ``voyages.parquet`` alone
@@ -103,6 +106,10 @@ MAX_PLAUSIBLE_SPEED_KNOTS = 50.0
 # Check 2: positions on land. Unvalidated, sized to ingest.landmask's empirically observed
 # coastline-generalization offset (~200m-1km) -- see module docstring.
 COASTAL_EROSION_DEG = 0.01  # ~1.1km at these latitudes
+
+# Land polygons are cropped to the data's own bounding box (plus this margin) before erosion and
+# containment testing -- see module docstring for why this stopped being optional.
+BBOX_MARGIN_DEG = 0.5
 
 # Check 3: synthetic circles.
 MIN_POINTS_FOR_CIRCLE = 20
@@ -218,11 +225,27 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
 
     Requires the `all_days` view (see :func:`_build_all_days`) and the spatial extension loaded.
     See module docstring for why the land polygons are eroded before containment is tested, and for
-    the un-benchmarked performance caveat on this join.
+    why they are cropped to the data's own bounding box first -- one of Natural Earth's 11 features
+    is a single multipolygon of the ENTIRE world's coastline, and testing every clean AIS point
+    against its full vertex set (most of it thousands of km from Denmark) is what made this check
+    impractically slow (confirmed: a real 30-day run did not finish in over 80 minutes before being
+    killed). Cropping first, then eroding the much smaller cropped shape, keeps every subsequent
+    ST_Contains call cheap without changing which points get flagged inside the data's own extent.
     """
+    bounds = con.execute(
+        "SELECT min(latitude), max(latitude), min(longitude), max(longitude) FROM all_days"
+    ).fetchone()
+    lat_min, lat_max, lon_min, lon_max = bounds
+    m = BBOX_MARGIN_DEG
+    bbox_wkt = (
+        f"POLYGON(({lon_min - m} {lat_min - m}, {lon_max + m} {lat_min - m}, "
+        f"{lon_max + m} {lat_max + m}, {lon_min - m} {lat_max + m}, {lon_min - m} {lat_min - m}))"
+    )
     con.execute(
         "CREATE OR REPLACE TEMP TABLE _land_eroded AS "
-        f"SELECT ST_Buffer(geom, -{COASTAL_EROSION_DEG}) AS geom FROM read_parquet('{land_path.as_posix()}')"
+        "SELECT ST_Buffer(ST_Intersection(geom, ST_GeomFromText(?)), ?) AS geom "
+        "FROM read_parquet(?) WHERE ST_Intersects(geom, ST_GeomFromText(?))",
+        [bbox_wkt, -COASTAL_EROSION_DEG, str(land_path), bbox_wkt],
     )
     rows = con.execute(
         "SELECT a.mmsi, a.timestamp, a.latitude, a.longitude "
