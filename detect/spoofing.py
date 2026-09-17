@@ -24,8 +24,15 @@ of consecutive points.
 global ceiling, not per-ship-type -- there is no calibration data yet to justify a faster threshold
 for, say, a fast ferry or a naval vessel, so a genuinely fast vessel with real GPS/timestamp jitter
 over a very short interval could trigger a false positive here. An unvalidated default, like every
-threshold in this module. Pairs with ``time_diff_seconds == 0`` are skipped by this check on
-purpose -- two messages at the same instant are Check 4's job, not an infinite/undefined speed here.
+threshold in this module. Pairs closer together than :data:`MIN_SPEED_CHECK_INTERVAL_SECONDS` (60s,
+which includes ``time_diff_seconds == 0`` -- two messages at the same instant are Check 4's job, not
+an infinite/undefined speed here) are skipped **not just to avoid noise, but because without this
+gate the check is useless in practice**: measured against one real day (2024-06-05), 76,970 of
+10,391,420 consecutive pairs (0.74%) exceeded 50kn, and 98.2% of those had a time gap under 10
+seconds -- ordinary GPS/positional jitter of a few dozen metres, amplified into an "impossible"
+speed by dividing by a near-zero interval. At 60s+ that same day had only 167 flagged pairs, two
+orders of magnitude fewer and a plausible rate for a real anomaly signal. This was found the hard
+way, from a real run that flagged 31% of the whole 30-day dataset before the gate was added.
 
 **Check 2: positions on land.** Needs :mod:`ingest.landmask`'s pre-built land polygons. That
 module's own docstring documents an empirically measured ~200m coastline-generalization error (a
@@ -108,6 +115,9 @@ SPOOFING_PATH = DETECT_ROOT / "spoofing.parquet"
 
 # Check 1: impossible speed. Unvalidated global ceiling -- see module docstring.
 MAX_PLAUSIBLE_SPEED_KNOTS = 50.0
+# Pairs closer together in time than this are skipped -- see module docstring for the real-data
+# finding that motivated it.
+MIN_SPEED_CHECK_INTERVAL_SECONDS = 60.0
 
 # Check 2: positions on land. Unvalidated, sized to ingest.landmask's empirically observed
 # coastline-generalization offset (~200m-1km) -- see module docstring.
@@ -116,6 +126,14 @@ COASTAL_EROSION_DEG = 0.01  # ~1.1km at these latitudes
 # Land polygons are cropped to the data's own bounding box (plus this margin) before erosion and
 # containment testing -- see module docstring for why this stopped being optional.
 BBOX_MARGIN_DEG = 0.5
+# The bounding box is computed from these tail quantiles of the data's own lat/lon, not raw
+# min/max -- see module docstring for the real outlier positions (up to 89 degrees latitude) that
+# made a min/max bbox nearly useless.
+BBOX_OUTLIER_QUANTILE = 0.001
+# Tolerance for simplifying the cropped, eroded land shape before the containment join -- an order
+# of magnitude finer than COASTAL_EROSION_DEG, so it does not meaningfully change which points are
+# flagged, only how many vertices ST_Contains has to test against.
+LAND_SIMPLIFY_TOLERANCE_DEG = 0.001
 
 # Check 3: synthetic circles.
 MIN_POINTS_FOR_CIRCLE = 20
@@ -182,8 +200,10 @@ def check_impossible_speed(con: duckdb.DuckDBPyConnection) -> list[SpoofingEvent
     """Flag consecutive same-mmsi pairs whose implied speed exceeds MAX_PLAUSIBLE_SPEED_KNOTS.
 
     Requires the `all_days` view (see :func:`_build_all_days`) and the spatial extension loaded.
-    Pairs with time_diff_seconds == 0 are skipped -- that is Check 4's job, not this one's; skipping
-    them here also avoids a division by zero.
+    Pairs with ``time_diff_seconds < MIN_SPEED_CHECK_INTERVAL_SECONDS`` are skipped (this includes
+    ``== 0``, which is Check 4's job, not this one's) -- see module docstring and
+    :data:`MIN_SPEED_CHECK_INTERVAL_SECONDS` for why: ordinary GPS/positional noise, amplified by
+    dividing by a very short interval, otherwise dominates the results.
     """
     rows = con.execute(
         "WITH ordered AS ("
@@ -202,13 +222,13 @@ def check_impossible_speed(con: duckdb.DuckDBPyConnection) -> list[SpoofingEvent
         "         ) AS distance_m "
         "  FROM ordered "
         "  WHERE prev_timestamp IS NOT NULL "
-        "    AND date_diff('second', prev_timestamp, timestamp) > 0"
+        "    AND date_diff('second', prev_timestamp, timestamp) >= ?"
         ") "
         "SELECT mmsi, timestamp, latitude, longitude, time_diff_seconds, "
         "       (distance_m / time_diff_seconds) * (3600.0 / 1852.0) AS implied_speed_knots "
         "FROM paired "
         "WHERE (distance_m / time_diff_seconds) * (3600.0 / 1852.0) > ?",
-        [MAX_PLAUSIBLE_SPEED_KNOTS],
+        [MIN_SPEED_CHECK_INTERVAL_SECONDS, MAX_PLAUSIBLE_SPEED_KNOTS],
     ).fetchall()
 
     events = []
@@ -242,11 +262,28 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
     impractically slow (confirmed: a real 30-day run did not finish in over 80 minutes before being
     killed). Cropping first, then eroding the much smaller cropped shape, keeps every subsequent
     ST_Contains call cheap without changing which points get flagged inside the data's own extent.
+
+    **The bounding box itself uses tail quantiles, not raw min/max.** A real clean day (2024-06-05)
+    contains a handful of wildly corrupted positions -- 963 of 10,429,200 points (0.0092%) outside a
+    generous Danish-waters box, with latitude/longitude extremes of (89.16, -84.30) that
+    `process.clean`'s existing rules (valid range, not null island) do not catch. A raw min/max bbox
+    over that data covers most of the Northern Hemisphere -- 82,680 land-polygon vertices after
+    cropping, no faster than not cropping at all. :data:`BBOX_OUTLIER_QUANTILE` (0.1% each tail)
+    ignores that handful of outliers while still being data-driven, not hardcoded to Denmark (a
+    future working region, e.g. Phase 6's Gibraltar/Ceuta, gets its own bbox automatically). The
+    tiny fraction of genuine points outside the resulting box simply never get an on-land verdict --
+    an acceptable gap given they are already too corrupted to trust the coordinate at all.
     """
-    bounds = con.execute(
-        "SELECT min(latitude), max(latitude), min(longitude), max(longitude) FROM all_days"
+    lat_min, lat_max, lon_min, lon_max = con.execute(
+        "SELECT quantile_cont(latitude, ?), quantile_cont(latitude, ?), "
+        "quantile_cont(longitude, ?), quantile_cont(longitude, ?) FROM all_days",
+        [
+            BBOX_OUTLIER_QUANTILE,
+            1 - BBOX_OUTLIER_QUANTILE,
+            BBOX_OUTLIER_QUANTILE,
+            1 - BBOX_OUTLIER_QUANTILE,
+        ],
     ).fetchone()
-    lat_min, lat_max, lon_min, lon_max = bounds
     m = BBOX_MARGIN_DEG
     bbox_wkt = (
         f"POLYGON(({lon_min - m} {lat_min - m}, {lon_max + m} {lat_min - m}, "
@@ -254,9 +291,11 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
     )
     con.execute(
         "CREATE OR REPLACE TEMP TABLE _land_eroded AS "
-        "SELECT ST_Buffer(ST_Intersection(geom, ST_GeomFromText(?)), ?) AS geom "
+        "SELECT ST_SimplifyPreserveTopology("
+        "  ST_Buffer(ST_Intersection(geom, ST_GeomFromText(?)), ?), ?"
+        ") AS geom "
         "FROM read_parquet(?) WHERE ST_Intersects(geom, ST_GeomFromText(?))",
-        [bbox_wkt, -COASTAL_EROSION_DEG, str(land_path), bbox_wkt],
+        [bbox_wkt, -COASTAL_EROSION_DEG, LAND_SIMPLIFY_TOLERANCE_DEG, str(land_path), bbox_wkt],
     )
     rows = con.execute(
         "SELECT a.mmsi, a.timestamp, a.latitude, a.longitude "
