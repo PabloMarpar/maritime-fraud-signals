@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-17_
+_Last updated: 2026-09-18_
 
 ## Done
 
@@ -91,6 +91,23 @@ _Last updated: 2026-09-17_
   redone from scratch** with the fixed code — see In progress / Next up.
 - 163 tests passing, `ruff` clean across the repo (as of this session's close).
 
+- **P2-3 fully closed: `detect.spoofing`'s real 30-day run finished and `on_land` sanity-checked.**
+  A fourth real-data bug was found and fixed this session (see `docs/DECISIONS.md`): the
+  single-day-validated `check_on_land` still didn't finish a real 30-day run in over 3.5 hours,
+  because the whole-window bbox pulled in more coastline than a single day's crop, compounded by one
+  monolithic 312M-row spatial join. Fixed by exploding the land mask into small-bbox pieces via
+  `ST_Dump` before cropping (~2x faster per day alone) and chunking the join by day partition instead
+  of one shot (total cost now tracks the well-measured per-day rate). The real run completed:
+  `impossible_speed` 8,218, **`on_land` 10,092,010** (94.3 min), `synthetic_circle` 93,
+  `simultaneous_position` 1,627 — 10,101,948 events total in `data/detect/spoofing.parquet`.
+  `on_land`'s volume was sanity-checked and is **not** a bug: 6,164 of 21,146 distinct MMSI have at
+  least one flagged position, but the top 10 MMSI alone account for 2M+ events, each moored at one
+  exact spot (spatial stddev 2-100m) for the full 30-day window — vessels genuinely docked the entire
+  time, transmitting continuously, exactly the documented "not deduplicated per stay" behaviour, not
+  a mask/erosion defect. Noted for `features/`: raw on_land count will be dominated by dwell time, a
+  rate or distinct-episode feature will likely be more useful than a raw count. 163 tests still pass,
+  `ruff` clean (3 tests updated for `check_on_land`'s new `partitions` argument).
+
 - **`detect.gaps` run over the real 30-day window (2024-06-01..2024-07-01), sanity-checked.**
   74,546 candidate gaps scored (`data/detect/gaps.parquet`) — exactly `95,692 voyages - 21,146
   distinct mmsi`, confirming `candidate_gaps` captured every voyage-to-voyage boundary correctly.
@@ -110,25 +127,11 @@ _Last updated: 2026-09-17_
 
 ## In progress
 
-- **`detect.spoofing.build_spoofing_events` over the real 2024-06-01..2024-06-30 window, stopped
-  mid-run by request, to resume next session.** Re-run from scratch with:
-  `python -m detect.spoofing --start 2024-06-01 --end 2024-06-30 --force` (the land mask already
-  exists at `data/reference/land.parquet`, no need to rebuild it). With all three fixes above, the
-  `impossible_speed` check finished the real run in 72s (8,217 events — sane, down from 3.2M before
-  the fix). The `on_land` check was ~30-35 min at a one-real-day-measured rate (68s/day after the
-  quantile-bbox + simplify fix) when stopped; `synthetic_circle` and `simultaneous_position` had not
-  started. Per-check progress now logs as each one finishes (not just a final summary), so a
-  background run can be watched without guessing which stage it's in. **Budget at least an hour for
-  this to finish**, and sanity-check the output the same way `detect.gaps` was checked (verdict/kind
-  breakdown, does anything look implausibly common) before trusting it — the `on_land` count on one
-  real day (277,788 of 10.4M positions, 2.7%) has NOT been sanity-checked against docked/anchored
-  vessel share yet, and could turn out to need the same kind of fix the other two checks did.
+- Nothing in progress. P2-3 is fully closed (code, real run, sanity-check — see Done above).
 
 ## Next up
 
-1. **Finish the `detect.spoofing` real run above and sanity-check it.**
-2. After that's sanity-checked, **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is
-   next in `tasks.json`.
+1. **P2-4, detector 3: ship-to-ship transfers** (GFW definition) is next in `tasks.json`.
 
 ## Blocked
 
@@ -136,11 +139,6 @@ _Last updated: 2026-09-17_
 
 ## Open questions
 
-- **`detect.spoofing`'s `on_land` rate on one real day was 2.7% of all positions (277,788 of 10.4M),
-  not yet sanity-checked against how much of that is plausible (docked/anchored vessels near a
-  coastline the eroded mask still catches) versus a sign this check also needs a fix**, the way the
-  other two did. Check this once the full real run (see In progress) finishes and before trusting
-  `on_land` events downstream.
 - **`detect/gaps.py`'s verdict→probability table (0.9/0.15/0.5) and the 12h clamp band ([0.4, 0.6])
   are unvalidated guesses**, never checked against any labelled case (the real 30-day run only
   confirmed the code runs correctly and the clamp fires where expected, not that the numbers are
@@ -174,9 +172,10 @@ _Last updated: 2026-09-17_
 
 ## Disk budget — read before downloading more days
 
-**~73 GB free** (of 931 GB) as of 2026-09-17. `data/clean/` for the 30-day window is ~14 GB.
-`data/identity/`, `data/tracks/`, `data/coverage/` together are a few MB — the whole point of
-reducing to aggregates. One raw day ≈ 507 MB, discarded immediately after cleaning by
+**~80 GB free** (of 931 GB) as of 2026-09-18. `data/clean/` for the 30-day window is ~14 GB.
+`data/identity/`, `data/tracks/`, `data/coverage/` together are a few MB, `data/detect/spoofing.parquet`
+is 109 MB (10.1M events) — the whole point of reducing to aggregates. One raw day ≈ 507 MB, discarded
+immediately after cleaning by
 `pipeline/backfill.py`. Phase 3-4's "years of depth" requirement (several validation cutoffs `T`,
 each needing data before and after) should still be met by **sampling short windows around each
 cutoff**, not downloading every day, and eventually by discarding cleaned days too once Phase 2's

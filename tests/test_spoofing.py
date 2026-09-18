@@ -210,9 +210,10 @@ def test_position_solidly_inland_is_flagged(tmp_path):
     _write_land(land_path, LAND_POLYGON)
     root = tmp_path / "clean"
     _write_clean_partition(root, DAY, [(444, _ts(0), 55.5, 10.5)])
-    spoofing._build_all_days(con, [(DAY, root / "date=2024-06-05" / "part-0.parquet")])
+    partitions = [(DAY, root / "date=2024-06-05" / "part-0.parquet")]
+    spoofing._build_all_days(con, partitions)
 
-    events = spoofing.check_on_land(con, land_path)
+    events = spoofing.check_on_land(con, partitions, land_path)
 
     assert len(events) == 1
     assert events[0].kind == "on_land"
@@ -229,9 +230,10 @@ def test_position_outside_land_polygon_is_not_flagged(tmp_path):
     _write_land(land_path, LAND_POLYGON)
     root = tmp_path / "clean"
     _write_clean_partition(root, DAY, [(555, _ts(0), 57.3, 11.3)])
-    spoofing._build_all_days(con, [(DAY, root / "date=2024-06-05" / "part-0.parquet")])
+    partitions = [(DAY, root / "date=2024-06-05" / "part-0.parquet")]
+    spoofing._build_all_days(con, partitions)
 
-    events = spoofing.check_on_land(con, land_path)
+    events = spoofing.check_on_land(con, partitions, land_path)
 
     assert events == []
     con.close()
@@ -250,9 +252,10 @@ def test_position_near_boundary_within_erosion_buffer_is_not_flagged(tmp_path):
     # 0.005 degrees inside the western edge (x=10) -- inside the raw polygon, inside the
     # COASTAL_EROSION_DEG=0.01 buffer, so the eroded polygon does not reach this point.
     _write_clean_partition(root, DAY, [(666, _ts(0), 55.5, 10.005)])
-    spoofing._build_all_days(con, [(DAY, root / "date=2024-06-05" / "part-0.parquet")])
+    partitions = [(DAY, root / "date=2024-06-05" / "part-0.parquet")]
+    spoofing._build_all_days(con, partitions)
 
-    events = spoofing.check_on_land(con, land_path)
+    events = spoofing.check_on_land(con, partitions, land_path)
 
     assert events == [], "erosion buffer was not applied -- raw-polygon containment used instead"
     con.close()

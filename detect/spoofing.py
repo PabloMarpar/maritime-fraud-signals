@@ -251,7 +251,11 @@ def check_impossible_speed(con: duckdb.DuckDBPyConnection) -> list[SpoofingEvent
     return events
 
 
-def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -> list[SpoofingEvent]:
+def check_on_land(
+    con: duckdb.DuckDBPyConnection,
+    partitions: list[tuple[date, Path]],
+    land_path: Path = LAND_PATH,
+) -> list[SpoofingEvent]:
     """Flag every clean position solidly inside an eroded land polygon.
 
     Requires the `all_days` view (see :func:`_build_all_days`) and the spatial extension loaded.
@@ -273,6 +277,25 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
     future working region, e.g. Phase 6's Gibraltar/Ceuta, gets its own bbox automatically). The
     tiny fraction of genuine points outside the resulting box simply never get an on-land verdict --
     an acceptable gap given they are already too corrupted to trust the coordinate at all.
+
+    **A fourth real-data bug, found the same way as the first three (see module docstring): a real
+    30-day run of this exact single-day-validated approach still did not finish in over 3.5 hours.**
+    The single-day bbox (measured at 68s/day) understated the real 30-day bbox: the DMA's coastal
+    receivers see a wider area over a month than on any one day, so the tail-quantile crop over the
+    full window pulls in visibly more Baltic/Scandinavian coastline than a single day's crop does.
+    Worse, the whole 30-day join was a single monolithic spatial join over the 312M-row union of all
+    partitions, so a modest increase in land complexity multiplied against 30x the points with no
+    per-day checkpoint. Two independent fixes, both confirmed by direct timing before being trusted
+    at scale (not by review alone): (1) the land crop now runs ``ST_Dump`` on the raw multipolygons
+    *before* cropping, exploding each landmass/island into its own row with a small, tight bounding
+    box, instead of eroding one or two sprawling multi-part geometries -- measured ~2x faster per day
+    even alone (68s -> 32s on 2024-06-05); (2) the point-in-polygon join now runs per day partition
+    in a Python loop, not once over the full window, so total cost is the well-measured per-day cost
+    times the day count (~45-50s/day observed, ~25 min projected for 30 days) instead of an
+    unpredictable one-shot join. **Decomposing the land geometry before cropping changes event counts
+    by a small amount** (286,440 vs. the pre-fix 277,788 on 2024-06-05, +3.1%) from processing-order
+    differences in how adjoining Natural-Earth pieces are cropped and eroded -- within the noise of
+    an already-unvalidated heuristic (see below), not chased to exact parity.
     """
     lat_min, lat_max, lon_min, lon_max = con.execute(
         "SELECT quantile_cont(latitude, ?), quantile_cont(latitude, ?), "
@@ -290,18 +313,22 @@ def check_on_land(con: duckdb.DuckDBPyConnection, land_path: Path = LAND_PATH) -
         f"{lon_max + m} {lat_max + m}, {lon_min - m} {lat_max + m}, {lon_min - m} {lat_min - m}))"
     )
     con.execute(
-        "CREATE OR REPLACE TEMP TABLE _land_eroded AS "
-        "SELECT ST_SimplifyPreserveTopology("
-        "  ST_Buffer(ST_Intersection(geom, ST_GeomFromText(?)), ?), ?"
-        ") AS geom "
-        "FROM read_parquet(?) WHERE ST_Intersects(geom, ST_GeomFromText(?))",
-        [bbox_wkt, -COASTAL_EROSION_DEG, LAND_SIMPLIFY_TOLERANCE_DEG, str(land_path), bbox_wkt],
+        "CREATE OR REPLACE TEMP TABLE _land_pieces AS "
+        "SELECT ST_SimplifyPreserveTopology(ST_Buffer(piece, ?), ?) AS geom FROM ("
+        "  SELECT ST_Intersection((UNNEST(ST_Dump(geom))).geom, ST_GeomFromText(?)) AS piece "
+        "  FROM read_parquet(?)"
+        ") WHERE NOT ST_IsEmpty(piece)",
+        [-COASTAL_EROSION_DEG, LAND_SIMPLIFY_TOLERANCE_DEG, bbox_wkt, str(land_path)],
     )
-    rows = con.execute(
-        "SELECT a.mmsi, a.timestamp, a.latitude, a.longitude "
-        "FROM all_days a, _land_eroded l "
-        "WHERE ST_Contains(l.geom, ST_Point(a.longitude, a.latitude))"
-    ).fetchall()
+    rows: list[tuple] = []
+    for _day, path in partitions:
+        rows.extend(
+            con.execute(
+                "SELECT DISTINCT a.mmsi, a.timestamp, a.latitude, a.longitude "
+                f"FROM read_parquet('{path.as_posix()}') a, _land_pieces l "
+                "WHERE ST_Contains(l.geom, ST_Point(a.longitude, a.latitude))"
+            ).fetchall()
+        )
 
     return [
         SpoofingEvent(
@@ -589,7 +616,7 @@ def build_spoofing_events(
         events: list[SpoofingEvent] = []
         for name, run_check in (
             ("impossible_speed", lambda: check_impossible_speed(con)),
-            ("on_land", lambda: check_on_land(con, land_path)),
+            ("on_land", lambda: check_on_land(con, partitions, land_path)),
             ("synthetic_circle", lambda: check_synthetic_circles(con, voyages_path, start, end)),
             ("simultaneous_position", lambda: check_simultaneous_positions(con)),
         ):

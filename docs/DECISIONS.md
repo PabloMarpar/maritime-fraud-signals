@@ -276,3 +276,37 @@ _2026-09-17_
   seconds, where ordinary GPS/positional jitter of a few dozen metres is amplified into an
   "impossible" speed by dividing by a near-zero interval. At 60s+ the same day's flags dropped from
   76,970 to 167, two orders of magnitude fewer and a plausible rate for a real anomaly signal.
+
+_2026-09-18_
+
+- **`check_on_land` decomposes the land mask with `ST_Dump` before cropping, and runs the
+  point-in-polygon join per day partition instead of once over the full window.** Reason: a fourth
+  real-data bug, found the same way as the first three — the single-day-validated version (68s/day)
+  still did not finish a real 30-day run in over 3.5 hours. Root cause: the tail-quantile bbox is
+  computed from the *whole* window, and the DMA's receivers see visibly more Baltic/Scandinavian
+  coastline over a month than on any single day, so the crop pulled in more land complexity than the
+  one-day benchmark assumed — compounded by one monolithic spatial join over the 312M-row union
+  instead of a per-day checkpoint. Exploding each landmass/island into its own small-bbox row via
+  `ST_Dump` (instead of eroding one or two sprawling multi-part geometries) measured ~2x faster per
+  day on its own (68s -> 32s on 2024-06-05); chunking the join by day made total cost track the
+  well-measured per-day rate instead of an unpredictable one-shot query. The real 30-day run
+  completed in 94.3 minutes for this check (10,092,010 events) — slower than the ~25 min projected
+  from a COUNT(*)-only benchmark, because the projection didn't account for `.fetchall()` materializing
+  millions of Python row tuples; still bounded and non-pathological, unlike the pre-fix behaviour.
+- **Decomposing the land geometry with `ST_Dump` before cropping changes `on_land` event counts by a
+  small amount (+3.1%: 286,440 vs. the pre-fix 277,788 on 2024-06-05).** Reason: crop-then-erode
+  processing order differs slightly from erode-each-decomposed-piece at shared boundaries between
+  adjoining Natural Earth pieces. Not chased to exact parity — within the noise of an already
+  unvalidated heuristic (see the erosion-buffer decision above), and the fix's purpose was
+  performance, not a change in which points get flagged.
+- **`on_land`'s high real-run volume (10,092,010 events, 3.23% of all positions) is not a
+  miscalibration bug — sanity-checked and closed.** The volume is heavily concentrated: 6,164 of
+  21,146 distinct MMSI in the window have at least one flagged position, but the top 10 MMSI alone
+  account for over 2M events, each with a spatial stddev of 2e-05 to 0.001 degrees (2-100m) and
+  timestamps spanning the full 2024-06-01..2024-06-30 window — i.e. vessels moored at one exact spot
+  for the entire month, transmitting AIS continuously. This is exactly the behaviour the module
+  docstring already warned about ("a vessel that spends real time at a berth... can produce many
+  on_land rows for one stay -- expected, not deduplicated"), not a mask or erosion defect. Consequence
+  for `features/` (not yet built): raw per-vessel on_land event count will be dominated by dwell time,
+  not by anomalousness — a rate or distinct-dwell-episode feature will likely be more useful than a
+  raw count.
