@@ -174,6 +174,34 @@ def test_plausible_speed_is_not_flagged(tmp_path):
     con.close()
 
 
+def test_impossible_speed_evidence_value_is_correctly_scaled_for_east_west_offset(tmp_path):
+    """Regression test for the ST_Distance_Sphere argument-order bug found 2026-09-18: an
+    east-west offset must be scaled by cos(latitude), not left unscaled. A pure north-south
+    fixture (like test_impossible_speed_is_flagged above) cannot catch this."""
+    con = duckdb.connect()
+    con.execute("INSTALL spatial")
+    con.execute("LOAD spatial")
+    root = tmp_path / "clean"
+    # Same latitude, longitude differs by 0.1deg -> true distance ~6385m at lat=55 (scaled by
+    # cos(55deg)), giving ~206.9kn over 60s. The pre-fix bug (missing cos(lat) scaling) would
+    # compute ~11132m / ~360.6kn instead -- well outside this test's tolerance.
+    _write_clean_partition(
+        root,
+        DAY,
+        [
+            (888, _ts(0, 0, 0), 55.0, 12.0),
+            (888, _ts(0, 1, 0), 55.0, 12.1),
+        ],
+    )
+    spoofing._build_all_days(con, [(DAY, root / "date=2024-06-05" / "part-0.parquet")])
+
+    events = spoofing.check_impossible_speed(con)
+
+    assert len(events) == 1
+    assert events[0].evidence_value == pytest.approx(206.9, rel=0.05)
+    con.close()
+
+
 def test_zero_time_diff_is_not_flagged_by_speed_check(tmp_path):
     con = duckdb.connect()
     con.execute("INSTALL spatial")
@@ -417,6 +445,34 @@ def test_simultaneous_positions_far_apart_is_flagged(tmp_path):
     assert events[0].kind == "simultaneous_position"
     assert events[0].mmsi == 111
     assert events[0].evidence_value == pytest.approx(50_000, rel=0.05)
+    con.close()
+
+
+def test_simultaneous_positions_evidence_value_is_correctly_scaled_for_east_west_offset(tmp_path):
+    """Regression test for the ST_Distance_Sphere argument-order bug found 2026-09-18. A pure
+    north-south fixture (like test_simultaneous_positions_far_apart_is_flagged above) cannot
+    catch this -- only an east-west offset exercises the cos(latitude) scaling."""
+    con = duckdb.connect()
+    con.execute("INSTALL spatial")
+    con.execute("LOAD spatial")
+    root = tmp_path / "clean"
+    # Same latitude, longitude differs by 0.01566deg -> true distance ~1000m at lat=55. The
+    # pre-fix bug (missing cos(lat) scaling) would compute ~1743m instead -- well outside this
+    # test's tolerance.
+    _write_clean_partition(
+        root,
+        DAY,
+        [
+            (222, _ts(0), 55.0, 12.0),
+            (222, _ts(0), 55.0, 12.01566),
+        ],
+    )
+    spoofing._build_all_days(con, [(DAY, root / "date=2024-06-05" / "part-0.parquet")])
+
+    events = spoofing.check_simultaneous_positions(con)
+
+    assert len(events) == 1
+    assert events[0].evidence_value == pytest.approx(1000.0, rel=0.05)
     con.close()
 
 

@@ -86,6 +86,23 @@ unvalidated, exactly like ``detect.gaps``'s own probability table. Every thresho
 ``SIMULTANEOUS_DISTANCE_THRESHOLD_M``) is a considered but unvalidated default awaiting empirical
 calibration, not a tuned constant.
 
+**A fifth real-data bug, found 2026-09-18 while building P2-4's anchorage mask, not by review**:
+``ST_Distance_Sphere`` in this DuckDB build takes each point as ``ST_Point(latitude, longitude)``,
+the reverse of the standard ``ST_Point(longitude, latitude)`` order every other spatial function
+here uses (``ST_Contains``, ``ST_DWithin``, ``ST_ClosestPoint``, and ``ST_Point`` construction
+itself, which round-trips ``ST_Point(x, y)`` to WKT ``POINT (x y)`` exactly as given). Verified
+with a real-world distance: Copenhagen to Malmo (true ~28.4km) came back as 49.0km with the
+standard argument order, 28.45km once swapped -- and a pure east-west offset (where the error is
+purely a missing/inverted ``cos(latitude)`` scaling) isolates it unambiguously. **Checks 1 and 4
+(``check_impossible_speed``, ``check_simultaneous_positions``) both built their points with the
+standard, wrong-for-this-function order**, so every distance, and every implied speed, both checks
+ever computed was systematically inflated (worst for east-west separations, roughly unchanged for
+north-south ones) -- including the real 30-day counts recorded when P2-3 was first closed. Checks
+2 and 3 (``check_on_land``, ``check_synthetic_circles``) do not call ``ST_Distance_Sphere`` (the
+former uses ``ST_Contains``, the latter a local planar projection with its own explicit trig), so
+neither is affected. Fixed by swapping the argument order at both call sites; see
+``docs/DECISIONS.md`` for the fix and the corrected real-run numbers.
+
 One shared DuckDB connection is opened once and reused across all four checks, mirroring
 ``detect.gaps``'s pattern of never reconnecting mid-run.
 """
@@ -217,8 +234,14 @@ def check_impossible_speed(con: duckdb.DuckDBPyConnection) -> list[SpoofingEvent
         "paired AS ("
         "  SELECT mmsi, timestamp, latitude, longitude, "
         "         date_diff('second', prev_timestamp, timestamp) AS time_diff_seconds, "
+        # ST_Distance_Sphere in this DuckDB build expects each point as
+        # ST_Point(latitude, longitude) -- the reverse of the standard (longitude, latitude)
+        # order ST_Point uses everywhere else in this module (ST_Contains, land geometry). Found
+        # 2026-09-18: a pure east-west offset of known distance came back inflated by 1/cos(lat)
+        # (~1.7x at these latitudes) with the standard order, matched ground truth once swapped.
+        # See docs/DECISIONS.md.
         "         ST_Distance_Sphere("
-        "           ST_Point(prev_longitude, prev_latitude), ST_Point(longitude, latitude)"
+        "           ST_Point(prev_latitude, prev_longitude), ST_Point(latitude, longitude)"
         "         ) AS distance_m "
         "  FROM ordered "
         "  WHERE prev_timestamp IS NOT NULL "
@@ -535,14 +558,16 @@ def check_simultaneous_positions(con: duckdb.DuckDBPyConnection) -> list[Spoofin
         "WITH sequenced AS ("
         "  SELECT *, row_number() OVER () AS _seq FROM all_days"
         ") "
+        # Both points (latitude, longitude) order -- see check_impossible_speed's comment on
+        # ST_Distance_Sphere's reversed argument order in this DuckDB build.
         "SELECT a.mmsi, a.timestamp, a.latitude, a.longitude, "
         "       ST_Distance_Sphere("
-        "         ST_Point(a.longitude, a.latitude), ST_Point(b.longitude, b.latitude)"
+        "         ST_Point(a.latitude, a.longitude), ST_Point(b.latitude, b.longitude)"
         "       ) AS distance_m "
         "FROM sequenced a JOIN sequenced b "
         "  ON a.mmsi = b.mmsi AND a.timestamp = b.timestamp AND a._seq < b._seq "
         "WHERE ST_Distance_Sphere("
-        "  ST_Point(a.longitude, a.latitude), ST_Point(b.longitude, b.latitude)"
+        "  ST_Point(a.latitude, a.longitude), ST_Point(b.latitude, b.longitude)"
         ") > ?",
         [SIMULTANEOUS_DISTANCE_THRESHOLD_M],
     ).fetchall()

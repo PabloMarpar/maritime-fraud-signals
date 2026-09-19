@@ -310,3 +310,82 @@ _2026-09-18_
   for `features/` (not yet built): raw per-vessel on_land event count will be dominated by dwell time,
   not by anomalousness — a rate or distinct-dwell-episode feature will likely be more useful than a
   raw count.
+
+_2026-09-18_ (P2-4 session: a fifth `detect.spoofing` bug found while building the anchorage mask,
+fixed before continuing)
+
+- **`ST_Distance_Sphere` in this DuckDB build takes each point as `ST_Point(latitude, longitude)`,
+  not the standard `ST_Point(longitude, latitude)` every other spatial function here uses
+  (`ST_Contains`, `ST_DWithin`, `ST_ClosestPoint`, and `ST_Point` construction itself — confirmed
+  `ST_Point(x, y)` round-trips to WKT `POINT (x y)` exactly as given).** Verified against a
+  real-world distance (Copenhagen to Malmö, true ~28.4km): the standard `(lon, lat)` order gave
+  49.0km, `(lat, lon)` gave 28.45km. A pure east-west offset isolates it unambiguously — a pure
+  north-south fixture cannot, since a shared longitude makes the two argument orders numerically
+  close by coincidence, which is exactly why the original tests for `check_impossible_speed` and
+  `check_simultaneous_positions` (both north-south fixtures) never caught this.
+- **`check_impossible_speed` and `check_simultaneous_positions` both built their points with the
+  standard, wrong-for-this-function order, so every distance and implied speed either check ever
+  computed was systematically inflated** (worst for east-west separations, ~unchanged for
+  north-south ones, up to ~1.8x at Danish latitudes). Found while building `detect/anchorages.py`
+  for P2-4 (its own coastal-distance computation had the identical bug — fixed there first, then
+  traced back here), not by review. `check_on_land` (`ST_Contains`) and `check_synthetic_circles`
+  (a local planar projection with explicit trig, no `ST_Distance_Sphere` call) are unaffected.
+- **Fixed by swapping the argument order at both call sites, with an east-west regression test
+  added for each** (`test_impossible_speed_evidence_value_is_correctly_scaled_for_east_west_offset`,
+  `test_simultaneous_positions_evidence_value_is_correctly_scaled_for_east_west_offset`) — a
+  north-south-only fixture is no longer sufficient evidence that this convention holds. 180 tests
+  pass, `ruff` clean.
+- **The real 30-day run (2024-06-01..2024-06-30) was redone from scratch with the fix.** Both
+  affected checks dropped, as expected of a fix to an over-inflating bug: `impossible_speed` 8,218
+  → **5,499** (-33%), `simultaneous_position` 1,627 → **1,158** (-29%). `on_land` (10,092,010) and
+  `synthetic_circle` (93) are unchanged, as expected since neither is affected. New total:
+  10,098,760 events (was 10,101,948) in `data/detect/spoofing.parquet`. P2-3 remains closed; its
+  recorded real-run numbers are now the corrected ones.
+
+- **P2-4 done: detector 3, ship-to-ship transfers (`detect/sts.py`, `data/detect/sts.parquet`),
+  GFW's structural definition as hard gates plus a rule-based confidence score.** Built on top of
+  `detect/anchorages.py` (above). Episode segmentation (`segment_episodes`) is the direct fix for
+  the 647-hour false-encounter artifact the session's opening proxy query found: co-location is
+  cut into discrete episodes whenever consecutive 10-minute slots are more than
+  `EPISODE_SEPARATION_MINUTES` (60) apart, run as ONE global pass (not per day), so an episode can
+  never straddle a day boundary -- there is nothing to stitch. Hard gates are GFW's own four
+  (duration >=2h, median speed <2kn, separation <=500m, >=10km from a coastal anchorage); the
+  anchorage-distance leave-one-out reuses the arithmetic form from `detect.anchorages`'s
+  `list_filter`+lambda finding (`len(member_mmsis) - list_contains(...)::INT -
+  list_contains(...)::INT`), not `list_filter` itself. Confidence combines six discriminators
+  (rendezvous signature, co-drift, ship-type pairing, `navigational_status` with a "moored
+  offshore" inversion, pair repetition, duration) as a documented, unvalidated heuristic -- never
+  a calibrated probability, mirroring `detect.gaps`'s own posture; P2-7's agreement with the GFW
+  Events API must be measured on the hard-gated set, not a confidence cut. 22 new tests, 202
+  total, `ruff` clean.
+- **Real 30-day run: 1,255,460 candidate episodes -> 1,689 survive the hard gates** (a ~743x cut,
+  stronger than the 7-day prototype's 180x -- a full month accumulates more repeat-moored-neighbour
+  episodes for the anchorage exclusion to catch), mean confidence 0.382, in 17.6 minutes wall-clock
+  (no per-point spatial join; the pairwise join runs on a 10-minute-slot aggregate, ~49.2M
+  pair-slots for the month). Sanity-checked: all six score components land in their designed
+  [0,1] ranges; top-15-by-confidence pairs are all short (2-9.3h) despite a 466h max duration in
+  the full set (47 episodes >=24h) -- the duration-decay term is doing its job, not just present
+  in the formula; survivor positions cluster in the Kattegat/Skagerrak/open Baltic, not the
+  Belts, matching the pre-registered "this detector effectively cannot see the Danish Belts"
+  limitation (10km coastal limit + 10km exclusion radius removes ~20km of shore, and the Great
+  Belt is narrower than that). Ship-type mix matches the 7-day prototype's prediction: dominated
+  by Passenger/Passenger (179), Other/Other (115), Passenger/SAR (87), Sailing/Sailing (69),
+  Fishing/Fishing (65) -- only 28 of 1,689 rows involve a Tanker at all, none in the top 15.
+- **Observed, not fixed: a service-vessel pair (e.g. Tug/Tug) can still score a high overall
+  confidence (0.82 seen) despite `score_ship_type`'s 0.1 penalty**, if the other five
+  discriminators are strong (genuine movement on both sides, real co-drift, a one-off encounter,
+  short duration) -- `W_SHIP_TYPE` (0.20) is not large enough to override that combination on its
+  own. This is the weighted-sum design working as specified, not a bug: two tugs that are
+  genuinely under way together, drifting, meeting once, briefly, is exactly the shape of evidence
+  the other five terms were built to reward. Left as observed behaviour, not retuned -- with no
+  labels, adjusting a weight because one case "looks wrong" is the same mistake as loosening a
+  gate until the count "looks right" (a trap this module's plan explicitly flagged in advance).
+  Worth revisiting once P2-7 gives a labelled or cross-checked comparison point.
+- **`data/coverage/` now means "derived spatial/temporal support tables consumed by a detector",
+  not only receiver coverage** — `detect/anchorages.py`'s mask lands there (alongside
+  `liveness.parquet`), not under `data/reference/`. Reason: `data/reference/` means geometry this
+  project *downloaded* (`ingest/landmask.py`, `ingest/ports.py`); the anchorage mask is derived
+  from the very AIS it will be used to filter, and keeping that provenance distinction visible in
+  the directory layout is the point of the module's anti-circularity safeguards. A future derived
+  support table belongs in `data/coverage/` too, not a new directory, unless it stops being a
+  detector-support artifact.
