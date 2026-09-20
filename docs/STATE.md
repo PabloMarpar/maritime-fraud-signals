@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-19_
+_Last updated: 2026-09-20_
 
 ## Done
 
@@ -55,14 +55,28 @@ _Last updated: 2026-09-19_
   `knowable_at`, `build_vessel_links` needed a timestamp at all) — full detail in
   `docs/DECISIONS.md`. 32 new tests, 242 total, `ruff` clean.
 
+- **P2-6 done**: `detect/behaviour.py` — detector 5, declared-behaviour contradictions.
+  `destination_course_mismatch` (declared destination matched to a port by name; flags a voyage
+  whose median COG-to-bearing deviation exceeds 90° over ≥10 qualifying points, ≥20km from the
+  port, ≥2.0kn SOG — COG used instead of heading, 91% vs 76% coverage in this window) and
+  `draught_change_unexplained` (≥2m median-draught change between consecutive voyages with no
+  port/anchorage or ship-to-ship-transfer evidence in the gap). Both scoped to MMSI with a valid
+  IMO, reusing P2-5's reframing. Real 30-day run: 916 events (152 `destination_course_mismatch`
+  across 117 MMSI, 764 `draught_change_unexplained` across 586 MMSI), ~55s wall-clock. A dedicated
+  review pass found and fixed three real bugs before close — an impossible `knowable_at` for the
+  draught check (now `window_end`, a whole-window judgement, not gap-bounded as first drafted), an
+  anchorage-evidence self-exoneration circularity (now leave-one-out, mirroring `detect.sts`'s own
+  fix from P2-1b), and ~24-30% of the course check's events being stationary-vessel COG noise (now
+  gated on SOG ≥2.0kn). 13 tests, `ruff` clean. Full detail in `docs/DECISIONS.md`.
+
 ## In progress
 
-- Nothing in progress. P2-5 is fully closed.
+- Nothing in progress. P2-6 is fully closed.
 
 ## Next up
 
-1. **P2-6, detector 5: declared-behaviour contradictions** (draught vs port calls, destination vs
-   heading) is next in `tasks.json`.
+1. **P2-7: measure agreement of detector 3 (ship-to-ship transfers) against the GFW Events API**
+   is next in `tasks.json`.
 
 ## Blocked
 
@@ -70,6 +84,24 @@ _Last updated: 2026-09-19_
 
 ## Open questions
 
+- **`detect/behaviour.py`'s `draught_change_unexplained` checks only the two voyage-boundary
+  positions for corroborating evidence, never the interior of the gap, and has no upper bound on
+  gap length** — the real run's flagged gaps run a median ~5 days (117h), p90 ~13 days (307h), with
+  the flagged position a median 27.6km from the nearest land. The modal flagged event is plausibly
+  an ordinary round trip to a port this project's Danish-only data cannot see (e.g. Rotterdam), not
+  evasion — declared draught is also a hand-keyed field with a large benign base rate. Not fixable
+  without broader AIS coverage or a port-depth reference; stated in the module docstring rather
+  than hidden.
+- **`detect/behaviour.py`'s thresholds (`COURSE_MISMATCH_ANGLE_DEG`, `MIN_PORT_APPROACH_DISTANCE_M`,
+  `MIN_COURSE_CHECK_SOG_KNOTS`, `MIN_DRAUGHT_CHANGE_M`, `ANCHORAGE_EVIDENCE_RADIUS_M`,
+  `PORT_MATCH_BBOX_MARGIN_DEG`) are unvalidated judgement calls**, same posture as every other
+  detector's thresholds. Revisit once Phase 3's sanctions-list join gives known-evasive vessels to
+  compare against.
+- **`detect/behaviour.py` does not resolve LOCODE-style destination text** (`NLRTM`, `PLGDN`,
+  `DK SKA`, ...) — only exact-normalized-name matches against the Natural Earth port list
+  participate. ~30% of destination text in this window is literally `Unknown`; most of the
+  remainder that isn't a legible port name simply produces no `destination_course_mismatch` event.
+  A LOCODE→port gazetteer would recover this but does not exist in this project.
 - **`detect/sts.py`'s confidence weights (0.35/0.20/0.20/0.10/0.10/0.05) are unvalidated
   judgement calls.** The real run showed a service-vessel pair (Tug/Tug) can outscore its
   ship-type penalty when the other five discriminators are strong (0.82 seen) — observed and left

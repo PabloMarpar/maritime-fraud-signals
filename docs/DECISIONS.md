@@ -474,3 +474,85 @@ fixed before continuing)
   `docs/STATE.md`. Gating on "ever" rather than a single resolved ship_type was a deliberate choice
   too: 98 of 21,146 MMSI report more than one valid ship_type, and gating on a resolved value would
   let that resolution rule silently change who counts.
+
+_2026-09-20_
+
+- **P2-6 done: detector 5, declared-behaviour contradictions (`detect/behaviour.py`,
+  `data/detect/behaviour.parquet`).** Two kinds. `destination_course_mismatch`: resolves each
+  candidate voyage's modal declared destination, matches it by exact normalized name against
+  `ingest.ports`'s Natural Earth port list (bboxed to the data's own extent + a 10-degree margin),
+  and flags a voyage whose median COG-to-bearing deviation exceeds 90 degrees over >=10 qualifying
+  points, each at least 20km from the matched port and at least 2.0kn SOG. `draught_change_unexplained`:
+  flags a >=2m median-draught change between an MMSI's consecutive voyages with no corroborating
+  port/anchorage or ship-to-ship-transfer evidence in the gap. Both scoped to MMSI that have ever
+  broadcast a valid IMO, reusing P2-5's reframing rather than re-deriving it. 13 tests, `ruff`
+  clean.
+- **COG used instead of heading, though the task named "destination vs heading"**: `heading` is
+  valid (!= 511) for only 76% of rows in this window vs. 91% for `cog`, and COG is the more
+  meaningful signal for "is this vessel moving toward its declared destination" regardless of
+  coverage. A deliberate substitution, not an oversight -- see the module docstring.
+- **LOCODE-style destinations (`NLRTM`, `PLGDN`, `DK SKA`, ...) are not resolved** -- ~30% of all
+  destination text in this window is literally `Unknown`, and the remainder mixes legible port
+  names, LOCODE-style codes, and free-text activity descriptors (`FISHING`, `FISHING GROUNDS`).
+  Only exact-normalized-name matches against the Natural Earth port list participate; no
+  abbreviation resolver was built. Recall loss, not a bug -- most real destination broadcasts
+  simply produce no check-1 event.
+- **Real 30-day run (post-review-fixes, see below for the pre-fix numbers this superseded): 916
+  events total -- 152 `destination_course_mismatch` across 117 MMSI, 764 `draught_change_unexplained`
+  across 586 MMSI.** `destination_course_mismatch` evidence (median course deviation): 90.0-179.8
+  degrees, median 139.1. `draught_change_unexplained` evidence (draught change): -7.8m to +13.5m,
+  median +2.3m. Wall-clock ~55s, far faster than P2-3/P2-4/P2-5's multi-minute real runs, because
+  both checks are pre-scoped to the ~29% of MMSI with a valid IMO before any expensive per-point
+  work runs.
+- **A dedicated review pass (run before closing the task, per `CLAUDE.md`), on the FIRST working
+  version and its FIRST real run (964 events: 200/764), found three real correctness bugs, none
+  caught by the 10 unit tests at the time.** All three are fixed, covered by new regression tests
+  (13 total), and re-validated against a second real run (916 events: 152/764, reported above):
+  1. **`draught_change_unexplained`'s `knowable_at = next_voyage.start_time` was impossible.** The
+     event's own headline number -- the NEW draught -- is a median over the vessel's ENTIRE next
+     voyage, not resolved until that voyage's `end_time`; measured on the first real run, all 764
+     events had `next_voyage.end_time` a median 42h (max 505h) after the stamped `knowable_at`. Two
+     further problems compounded this: the anchorage-evidence check reads `detect.anchorages`'s
+     mask, whose cells exist only as a WHOLE-30-day-window fact (14% of real coastal cells qualify
+     only because a 5th vessel showed up elsewhere in the window); and the STS-evidence check
+     borrows `detect.sts`'s `start_time`/`end_time` as if they were knowability stamps, but
+     `detect.sts` emits no `knowable_at` at all -- its own hard gates are whole-episode judgements.
+     Fixed by setting `knowable_at = window_end` for every `draught_change_unexplained` event, the
+     same posture `detect.identity_anomalies` already uses for its own whole-window judgements, for
+     the same reason: "no evidence found in this window" cannot be confirmed before the window ends.
+  2. **Anchorage evidence had a self-exoneration circularity bug, the same shape P2-1b already
+     found and fixed in `detect.sts`.** Without excluding the candidate MMSI from the anchorage
+     cell's member count, a vessel that is itself one of the required 5 qualifying members could
+     use its own mooring to exonerate its own draught change. Fixed with a leave-one-out check
+     (`len(member_mmsis) - list_contains(member_mmsis, mmsi)::INT >= MIN_DISTINCT_VESSELS`),
+     mirroring `detect.sts`'s own `_ANCHORAGE_MIN_OTHER_VESSELS` idiom exactly. Did not change the
+     real run's `draught_change_unexplained` count (764 before and after) -- no cell that provided
+     evidence in this window happened to be a marginal, self-qualifying one -- but is a correctness
+     fix independent of whether this window happens to exercise it.
+  3. **`destination_course_mismatch` had no speed floor, and ~24-30% of its events were stationary-
+     vessel COG noise, not a real contradiction.** COG is meaningless for a vessel making no way;
+     uniform-random COG jitter against a fixed bearing has an EXPECTED deviation of exactly 90
+     degrees, which was this check's own flagging threshold, so the rule was structurally selecting
+     for the artefact it should have excluded. The first real run's own 200 flagged voyages: 36.5%
+     had median SOG under 0.5kn (`detect.anchorages`'s own "stationary" definition). Fixed with a
+     2.0kn SOG floor on qualifying points; the real count dropped from 200 to 152 (-24%).
+  Also fixed, lower severity: the scope gate (`_valid_imo_mmsi`) used each MMSI's WHOLE-window
+  valid-IMO history with no time bound, which is monotone-accruing (not an absence claim) and so
+  does not need `window_end` -- but did need its own per-MMSI `first_valid_imo_at` folded into
+  `knowable_at` via `GREATEST`, mirroring `detect.identity_anomalies.check_reused_mmsi`'s reasoning
+  for the same shape of fact, not `check_no_valid_imo`'s. Empirically inert on the real run (zero
+  of 964 first-draft events had a first-valid-IMO timestamp later than their own `knowable_at`) but
+  fixed for correctness rather than left true only by luck in this one window. Check 1's
+  `knowable_at` also gained a `+ DEFAULT_GAP_HOURS` offset (a voyage boundary is only confirmed
+  once that much silence has elapsed, per `process.tracks`'s own definition) -- a minor, bounded
+  optimism fix, unlike the three bugs above.
+- **Known limitation, left as-is, not a bug**: `draught_change_unexplained`'s evidence search
+  checks only the two voyage-boundary positions, not the interior of the gap, and has no upper
+  bound on gap length -- the real run's flagged gaps have a median of ~5 days (117h) and a 90th
+  percentile of ~13 days (307h), with the flagged position a median 27.6km from the nearest land.
+  The modal flagged event is plausibly an ordinary round trip to a port this project's Danish-only
+  data cannot see (e.g. Rotterdam), not evasion. Declared draught is also a hand-keyed Message 5
+  field with a large benign base rate for "unexplained" change. Neither factor is fixable without
+  data this project does not have (a broader AIS feed, or a port-depth reference); both are stated
+  plainly in the module docstring rather than left implicit, per `CLAUDE.md`'s instruction to state
+  limitations explicitly.
