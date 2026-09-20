@@ -41,14 +41,28 @@ _Last updated: 2026-09-19_
   Real run: 1,255,460 candidate episodes → 1,689 survive the hard gates, mean confidence 0.382,
   sanity-checked against the pre-registered expectations (no Belts, few tankers, duration decay
   working). 202 tests total, `ruff` clean. Full detail in `docs/DECISIONS.md`.
+- **P2-5 done**: `detect/identity_anomalies.py` (8 kinds: `no_valid_imo`, `name_change`/
+  `name_flapping`, `callsign_change`/`callsign_flapping`, `reused_mmsi`, `shared_imo` with
+  `cross_mid`, `shared_identity`) + `detect/identity_anomalies.build_vessel_links`
+  (`data/identity/vessel_links.parquet`) + new `process/mid.py` (MID→flag lookup). Reframed per
+  P1-2: gates on "ever validly Tanker/Cargo without a valid IMO", not the global 71%
+  orphaned-MMSI rate. Real run: 265 events (`no_valid_imo` 91, `name_change` 47, `name_flapping`
+  60, `callsign_change` 12, `callsign_flapping` 22, `reused_mmsi` 1 — matching `process.identity`'s
+  own checksum-validated count exactly — `shared_imo` 18 with 14 `cross_mid`, `shared_identity`
+  14), 28 MMSI linked into 14 vessel groups, ~4.5 min wall-clock. A dedicated review pass found and
+  fixed four real temporal-leakage bugs before close (whole-window judgements need
+  `knowable_at = window_end`, a group-size gate must be evaluated as-of each pair's own
+  `knowable_at`, `build_vessel_links` needed a timestamp at all) — full detail in
+  `docs/DECISIONS.md`. 32 new tests, 242 total, `ruff` clean.
 
 ## In progress
 
-- Nothing in progress. P2-4 is fully closed.
+- Nothing in progress. P2-5 is fully closed.
 
 ## Next up
 
-1. **P2-5, detector 4: identity anomalies** (flag, name, MMSI changes) is next in `tasks.json`.
+1. **P2-6, detector 5: declared-behaviour contradictions** (draught vs port calls, destination vs
+   heading) is next in `tasks.json`.
 
 ## Blocked
 
@@ -75,16 +89,32 @@ _Last updated: 2026-09-19_
 - **`MIN_EXPECTED_CORROBORATORS`/`MIN_BASELINE_VESSELS` in `detect/liveness.py` are unvalidated
   defaults.** Revisit if P2-2's output looks miscalibrated at the `area_dark`/`no_evidence`
   boundary.
-- **`exclude_mmsi` in `liveness_verdict` doesn't resolve which MMSIs are the same vessel.**
-  Relevant once P2-5 (identity anomalies) exists; not a blocker today (only 1 reused MMSI found).
+- **`exclude_mmsi` in `liveness_verdict` still doesn't resolve which MMSIs are the same vessel
+  itself — `data/identity/vessel_links.parquet` now exists as the input to do so, but `gaps.py`/
+  `liveness.py` haven't been wired up to consume it.** Only 28 MMSI linked in the current window,
+  so still not a blocker; revisit if/when a caller actually needs the linkage. Note
+  `vessel_links`'s `knowable_at` is a lower bound, not a precise cutoff, for multi-hop groups —
+  see `detect/identity_anomalies.build_vessel_links`'s docstring before wiring it up under a
+  temporal cutoff.
+- **`detect/identity_anomalies.py`'s `KIND_BASE_CONFIDENCE` weights, `CROSS_MID_BONUS`, and
+  `SHIP_TYPE_INSTABILITY_PENALTY` are unvalidated judgement calls**, same posture as every other
+  detector's confidence score. Revisit once Phase 3's sanctions-list join gives known-evasive
+  vessels to compare against.
+- **`detect/identity_anomalies.py`'s `name_change`/`name_flapping`/`callsign_*`/`no_valid_imo`
+  kinds are only knowable as of the WHOLE build window's `window_end`, not at any intra-window
+  cutoff** — a deliberate, documented consequence of being a batch (not incremental) detector, not
+  a bug; see `docs/DECISIONS.md`. `features/` consuming this table under a rolling temporal cutoff
+  must treat the whole 30-day build as available only once `window_end` has passed, matching how
+  `detect.liveness`'s verdicts already work.
 - Tramo B (`detect/coverage.py` → `cadence.parquet`, reporting-cadence percentiles) is planned but
   not started.
 - **Meaning of the real schema's trailing `a, b, c, d` columns** — likely AIS diagnostic fields,
   not confirmed. Only worth resolving if a future detector needs them.
 - **Voyage gap threshold (6h default in `process/tracks.py`)** is defensible but unvalidated —
   it's a `gap_hours` parameter, not a hardcoded constant, if it needs revisiting.
-- **Whether the 30-day window needs extending for detector variety** (only 1 reused MMSI for
-  P2-5) — no signal either way yet. If so, extend with separate weeks spread across 2024 rather
+- **Whether the 30-day window needs extending for detector variety** — P2-5 found real, if thin,
+  signal in the current window (1 reused MMSI, 103 MMSI with a name change, 9 shared IMOs), so
+  still no strong signal either way. If extended, use separate weeks spread across 2024 rather
   than more contiguous June days (see `docs/DECISIONS.md`).
 
 ## Disk budget — read before downloading more days

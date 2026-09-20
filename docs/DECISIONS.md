@@ -389,3 +389,88 @@ fixed before continuing)
   the directory layout is the point of the module's anti-circularity safeguards. A future derived
   support table belongs in `data/coverage/` too, not a new directory, unless it stops being a
   detector-support artifact.
+
+- **P2-5 done: detector 4, identity anomalies (`detect/identity_anomalies.py`,
+  `data/detect/identity_anomalies.parquet`), plus a derived MMSI-linkage table
+  (`detect/identity_anomalies.build_vessel_links`, `data/identity/vessel_links.parquet`) and a new
+  `process/mid.py` (MID→flag-state lookup, needed here for `cross_mid` and again later by P4-1's
+  "flag of convenience" baseline).** Eight `kind`s: `no_valid_imo` (a Tanker/Cargo vessel that
+  never broadcasts a valid IMO, per the P1-2 reframing below), `name_change`/`name_flapping` and
+  `callsign_change`/`callsign_flapping` (a clean temporal switch between values vs. values
+  overlapping in time), `reused_mmsi` (>1 valid IMO on one MMSI), `shared_imo` and
+  `shared_identity` (one IMO or one (name, callsign) pair broadcast by >1 MMSI). `flag_change` is
+  deliberately NOT its own kind: a cross-flag share is always a `shared_imo` row with
+  `cross_mid=true`, since it is a strict subset of "same IMO, different MMSI" and a separate kind
+  would double-count it in any downstream aggregation. Text fields are normalized (`@`-padding
+  stripped, case/whitespace collapsed) before distinct-value comparison -- AIS Message 5 pads to a
+  fixed width, so `'MAERSK'`/`'MAERSK@@'`/`'  maersk '` are one name, not three. 32 new tests, 242
+  total, `ruff` clean.
+- **Real 30-day run**: 265 events -- `no_valid_imo` 91, `name_change` 47, `name_flapping` 60,
+  `callsign_change` 12, `callsign_flapping` 22, `reused_mmsi` 1, `shared_imo` 18 (9 IMOs × 2 MMSI,
+  14 of the 18 rows `cross_mid`), `shared_identity` 14 (7 pairs). `reused_mmsi`'s count of 1 matches
+  `process.identity`'s own checksum-validated finding exactly, the strongest available sanity check
+  on the validity filter. `build_vessel_links` linked 28 MMSI into 14 groups. Wall-clock 4m14-30s
+  (three runs), see the performance finding below.
+- **`name`/`callsign` text normalization did NOT reduce the flapping population**: pre-registered
+  expectations (from ad hoc profiling without `@`/case normalization) were 60 MMSI with two valid
+  names overlapping in time; the real run, WITH normalization applied, found exactly 60 again.
+  Padding/casing was not the explanation for the overlap after all -- these really are two
+  genuinely distinct decoded values whose broadcast windows overlap, most likely AIS decoding
+  noise (two receivers resolving the same message differently) rather than a real back-and-forth
+  rename, especially since only 1 MMSI in the same window holds >1 checksum-valid IMO. Recorded as
+  a finding, not treated as a bug: `name_flapping`/`callsign_flapping` keep low base confidence
+  (0.15) precisely because of this.
+- **Performance: an early version of this module funneled every check through one materialized
+  table carrying all three normalized text columns for all 346M messages in the window; the real
+  30-day run then took over 33 minutes and never finished logging its first check**, because
+  several checks queried that table (or views chained on top of it) more than once, each re-paying
+  for columns the check never used (`no_valid_imo`'s join alone cost 491.8s; `shared_identity`
+  878.4s). Fixed by having each `_build_*` stage read only the 2-4 raw columns its own check
+  needs, straight from the Parquet partitions -- the same per-purpose-scan pattern
+  `process.identity`/`detect.spoofing` already use, not a shared wide table. Real run after the
+  fix: ~254-270s total across six build stages (`value_intervals` ~51-53s and `identity_pairs`
+  ~127-134s are the two heaviest), then all six checks combined in under 1s. This is slower than
+  the ~60s this module's own plan assumed, but the same order of magnitude as this project's other
+  detectors at this data volume (P2-4's real run took 17.6 minutes) -- not fixed further, see
+  `docs/STATE.md`'s open questions.
+- **A dedicated review pass (run before closing the task, per `CLAUDE.md`) found four real
+  temporal-leakage bugs in the first working version, none caught by the unit tests at the time.**
+  All four are fixed and now covered by tests; recorded here because each is a genuinely easy
+  mistake to repeat elsewhere in this project:
+  1. Whether an MMSI's name/callsign history is a "clean switch" or "flapping" is a judgement over
+     the WHOLE window (a switch on day 5 that never reverts is indistinguishable, before
+     `window_end`, from one that reverts on day 20 and turns out to be flapping). `knowable_at` for
+     `name_change`/`name_flapping`/`callsign_change`/`callsign_flapping` is now `window_end`, not
+     an intra-window timestamp -- the identical fix `detect.liveness` already made for its own
+     verdicts, applied here independently before this session's reviewer pointed at the precedent.
+  2. `no_valid_imo` is also a whole-window absence claim (a valid IMO arriving on day 25 would undo
+     an "absence" staked on an earlier `last_seen`) -- `knowable_at` is now `window_end` here too,
+     not `last_seen`. `reused_mmsi` is the one kind that does NOT need this: a second valid IMO
+     makes the fact true immediately and no later evidence can undo it, so its `knowable_at` now
+     equals its own `event_time` (previously it was wrongly stamped with the vessel's overall
+     `last_seen`, always at or after the true moment).
+  3. `MAX_IDENTITY_GROUP_SIZE`'s skip-oversized-groups guard was applied using each group's
+     EVENTUAL, full-window member count, meaning whether an early, small `shared_imo`/
+     `shared_identity` pair survived depended on how many MORE mmsi joined the same group later in
+     the window -- a leak in the pair's very existence, not just its timestamp. `_expand_pairs` now
+     evaluates the cap as of each pair's own `knowable_at` (how many members had broadcast the
+     value by then), so early pairs formed before a group balloons past the cap still survive.
+  4. `build_vessel_links`'s output carried no timestamp at all, despite its own docstring inviting
+     a consumer to feed it into `detect.liveness.liveness_verdict`'s `exclude_mmsi` under a
+     temporal cutoff -- a consumer had no way to avoid using a link that only became knowable after
+     their cutoff. Fixed by carrying each mmsi's earliest edge `knowable_at` through, documented
+     explicitly as a NECESSARY-BUT-NOT-SUFFICIENT lower bound (a multi-hop group's full
+     connectivity can be knowable later than any single edge in it) rather than a precise cutoff --
+     a fully rigorous point-in-time regrouping would need to re-run the union-find restricted to
+     edges below the cutoff, which it does not do.
+  None of these changed the real 30-day run's event counts (the fixes change *when* a row is
+  knowable and, for point 3, *which* pairs inside an oversized group survive -- no group in the
+  real data came close to `MAX_IDENTITY_GROUP_SIZE`), so the numbers above are the corrected,
+  final ones.
+- **Reframing from P1-2 applied as planned, not re-litigated**: `no_valid_imo` gates on "ever
+  validly Tanker or Cargo" (a Tanker/Cargo vessel is required to carry an IMO; Sailing/Pleasure is
+  not), not on the 71% global orphaned-MMSI rate, and requires a minimum of 20 static messages and
+  3.0 observed days before treating an absence as evidence -- both unvalidated defaults, see
+  `docs/STATE.md`. Gating on "ever" rather than a single resolved ship_type was a deliberate choice
+  too: 98 of 21,146 MMSI report more than one valid ship_type, and gating on a resolved value would
+  let that resolution rule silently change who counts.
