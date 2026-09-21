@@ -97,14 +97,33 @@ _Last updated: 2026-09-21_
   alias/IMO-prefix variance) — full detail in `docs/DECISIONS.md`. 34 new tests, 315 total, `ruff`
   clean.
 
+- **P3-2 done**: `process/sanctions_match.py` — joins `sanctions.parquet` to `mmsi_imo.parquet` by
+  checksum-valid IMO (reusing `process.identity.VALID_IMO_SQL` verbatim, not reimplemented), lands
+  `data/identity/sanctions_matches.parquet` (one row per sanctioned-vessel-record x matching-mmsi
+  pair). Sanctions lists carry no MMSI of their own — MMSI surfaces in the output as the AIS-side
+  key that comes along once IMO matches, documented explicitly so "join by IMO and MMSI" isn't
+  misread as a direct MMSI field on the sanctions side. Real run 2026-09-21, **not** near-zero as
+  initially expected by analogy with P2-7's GFW comparison: of 2,191 checksum-valid sanctioned
+  records, **205 matched (9.4%), 164 distinct mmsi** — UK 130/662 (19.6%), OFAC 75/1,527 (4.9%), EU
+  0/2 (too small to read anything into). 41 of the 164 matched IMO are corroborated by both OFAC
+  and UK. Neither `mmsi_is_reused` matches nor the double-distinct-imo-same-mmsi ambiguity case
+  occurred in this window (0 each) — both are implemented and unit-tested against synthetic
+  fixtures, not exercised for real here. 1 of 2,192 real sanctions IMO values failed the checksum
+  (excluded, counted). A real bug found before trusting the result: computing the checksum-invalid
+  set as `WHERE ... AND NOT (VALID_IMO_SQL)` crashed with a `CAST` error on real OFAC/UK data —
+  wrapping the checksum arithmetic in `NOT(...)` defeats DuckDB's filter short-circuit that the
+  plain `WHERE ... AND VALID_IMO_SQL` form relies on, so `CAST` ran on non-numeric substrings.
+  Fixed with an anti-join against the already-validated view instead. 15 new tests, 330 total,
+  `ruff` clean. See `docs/DECISIONS.md` for the full write-up and open questions below for why the
+  headline number departs from the pre-registered near-zero expectation.
+
 ## In progress
 
-- Nothing in progress. P3-1 is fully closed.
+- Nothing in progress. P3-2 is fully closed.
 
 ## Next up
 
-1. **P3-2: join sanctions to vessels by IMO and MMSI; quantify match rate and ambiguity** is next
-   in `tasks.json`.
+1. **P3-3: build the labelled vessel-month panel** is next in `tasks.json`.
 
 ## Blocked
 
@@ -112,6 +131,15 @@ _Last updated: 2026-09-21_
 
 ## Open questions
 
+- **P3-2's 9.4% sanctions match rate is presence-only, not a ready-made label.** A matched row
+  means the sanctioned vessel's IMO was observed under some mmsi in this 30-day AIS window at
+  all — it says nothing about whether that presence overlaps the vessel's actual evasive
+  behaviour, and `designation_date` can fall before, during or after the AIS window. P3-3 (the
+  labelled vessel-month panel) must decide how to turn "matched, designated on date D" into a
+  temporally sound label — per `CLAUDE.md`'s leakage rule, a vessel-month's label can only use a
+  designation known as of that month, not one announced later in Phase 4's validation sense. Not
+  resolved here; `sanctions_matches.parquet` deliberately stops at the join + ambiguity-
+  quantification step the task asked for.
 - **P2-7's near-zero GFW overlap is plausibly compounded by the EU AIS carriage mandate exempting
   many smaller fishing vessels, and by GFW's own AIS feed disagreeing with DMA's on at least one
   real vessel pair's positions** — neither is verified here (see `docs/DECISIONS.md`'s P2-7 entry

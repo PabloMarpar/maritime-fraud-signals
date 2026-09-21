@@ -699,3 +699,65 @@ _2026-09-21_ (P3-1 session: sanctions list ingestion)
   flag, dates 2017-10-03 to 2026-08-06). Every real `designation_date_precision` resolved to
   `"day"` -- OFAC's partial-date path is implemented and unit-tested but not exercised by the
   current live snapshot. 34 new tests, `ruff` clean.
+
+_2026-09-21_ (P3-2 session: sanctions-to-AIS identity join)
+
+- **The join is IMO-to-IMO, not "by IMO and MMSI" in the literal sense of the task title.**
+  Sanctions lists (OFAC/EU/UK) carry no MMSI field at all -- MMSI is a radio-transponder identity,
+  not something a vessel registry or sanctions authority tracks. `process/sanctions_match.py`
+  joins on the one identifier both sides share (checksum-valid IMO) and lets MMSI surface in the
+  *output* as the AIS-side key that comes along once an IMO matches. Stated explicitly in the
+  module docstring so a future reader of the task title doesn't expect a direct MMSI column on
+  the sanctions side.
+- **`process.identity.VALID_IMO_SQL` is imported and reused verbatim against
+  `sanctions.parquet`'s own `imo` column, not reimplemented.** `mmsi_imo.parquet`'s `imo` is
+  already checksum-valid by construction; `sanctions.parquet`'s `imo` is bare digits typed by a
+  human at OFAC/EU/UK and had never been checked. Reusing the exact same SQL fragment both sides
+  means a sanctions-list data-entry typo that isn't even structurally a real IMO cannot coincide
+  with, or worse silently mis-join to, an unrelated real vessel.
+- **A real `CAST` error found and fixed before the real run could be trusted.** The first working
+  version computed the checksum-invalid sanctions set as `WHERE imo IS NOT NULL AND imo != '' AND
+  NOT (VALID_IMO_SQL)` -- this crashed (`Conversion Error: Could not convert string '' to INT32`)
+  against the real OFAC/UK data, but never crashed in the unit tests, whose only invalid fixture
+  (`"1234568"`) happens to be a well-formed 7-digit string with a wrong check digit, not one of
+  the malformed real values (wrong digit count / non-numeric) that actually triggered it. Root
+  cause: `process.identity`'s own `WHERE ... AND VALID_IMO_SQL` form works safely on malformed
+  strings because DuckDB short-circuits a top-level `WHERE` conjunction -- rows failing
+  `regexp_full_match` never reach the later `CAST(substr(...) AS INTEGER)` conjuncts. Wrapping the
+  identical expression in `NOT(...)` turns it into one nested boolean expression rather than a
+  top-level conjunction, which loses that short-circuit and evaluates the `CAST` on non-numeric
+  substrings of real malformed sanctions `imo` values. Fixed by computing the checksum-invalid set
+  as an anti-join against the already-validated `sanctions_valid` view instead of re-evaluating
+  `VALID_IMO_SQL`'s negation. Recorded here, not just fixed silently, because the exact same
+  `NOT(VALID_IMO_SQL)` pattern would fail identically anywhere else in this project that ever
+  wraps it.
+- **Real run 2026-09-21 over the 30-day window: 205/2,191 checksum-valid sanctioned records
+  matched (9.4%), 164 distinct mmsi -- NOT the near-zero result initially expected by analogy
+  with P2-7's GFW-encounters comparison.** Before running, the working assumption was that a
+  narrow 30-day Danish-only AIS window would barely intersect a global sanctions list, the same
+  shape of scope mismatch P2-7 found against GFW. That analogy does not hold here: the Danish
+  straits are not an arbitrary shipping lane but *the* chokepoint essentially all Baltic-origin
+  (heavily Russian) crude and product oil transits (this project's own founding scope decision,
+  see above) -- precisely the corridor a sanctioned-tanker "shadow fleet" would be expected to
+  use, unlike GFW's fishing-economy encounter dataset, which has no reason to concentrate here.
+  By source: UK 130/662 (19.6%), OFAC 75/1,527 (4.9%), EU 0/2 (too small a source, 2 vessels
+  total, to read anything into). Sanity-checked before trusting the number: the denominators
+  (2,191 checksum-valid + 1 checksum-invalid + 13 with no imo at all = 2,192 with-imo + 13 = 2,205
+  total) reproduce P3-1's own real counts exactly; a random sample of matched rows (vessel name,
+  imo, mmsi, AIS first/last-seen) was inspected by hand and is unremarkable -- plausible tanker
+  names and MIDs, message counts and date ranges consistent with real June 2024 AIS traffic, no
+  sign of a join fanning out or matching by accident. 41 of the 164 matched imo are corroborated
+  by both OFAC and UK (both sanctioned the same vessel, expected for high-profile Russia-linked
+  tankers after 2022); the remaining 123 are single-source. Neither of the other two ambiguity
+  kinds occurred for real in this window: 0 matched rows have `mmsi_is_reused=true`, and 0 mmsi
+  resolved to more than one distinct sanctioned imo -- both are implemented and unit-tested
+  against synthetic fixtures (a real population this small and this window's near-total absence
+  of MMSI reuse, see P2-5's own finding of exactly 1 reused mmsi project-wide, made both
+  genuinely unlikely to occur here, not untested).
+- **What this result does and does not mean, stated so P3-3 doesn't over-read it (see
+  `docs/STATE.md`'s open questions).** A match means the sanctioned vessel's IMO was observed
+  under some mmsi in this AIS window at all -- it is a presence signal, not a behavioural one, and
+  says nothing about whether that presence overlaps the vessel's evasive activity or precedes/
+  follows its `designation_date`. Turning "matched, designated on date D" into a temporally sound
+  per-vessel-month label (not using a designation before it was actually knowable) is explicitly
+  left to P3-3, per `CLAUDE.md`'s leakage rule -- not decided or pre-empted here.
