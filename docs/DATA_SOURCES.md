@@ -46,16 +46,65 @@ All sources are open, free and publicly documented. Verified reachable on 2026-0
 ## Sanctions lists (the labels)
 
 The designation **date** matters as much as the vessel identity — forward-looking validation depends
-on it. Always capture it.
+on it. Always capture it. All three confirmed live 2026-09-21; ingested by `ingest/sanctions.py`
+(P3-1), landed combined at `data/reference/sanctions.parquet` (`source` column distinguishes
+origin). Real run 2026-09-21: OFAC 1,540 vessels (1,528 with IMO, 37 with no flag), EU 2 vessels
+(both with IMO and flag), UK 663 vessels (662 with IMO, 143 with no flag) — 2,205 total. Every
+`designation_date_precision` observed live was `"day"`; OFAC's partial-date handling (month/year
+only) is implemented and unit-tested but never exercised by the current live snapshot.
 
-| Source | Format | URL |
-|---|---|---|
-| OFAC (US) | `sdn_enhanced.xml` | `https://ofac.treasury.gov/sanctions-list-service` |
-| EU consolidated list | XML | EU sanctions portal |
-| UK Sanctions List | XML / CSV | `https://search-uk-sanctions-list.service.gov.uk/` |
+### OFAC (US) — `fetch_ofac`
+- **URL:** `https://www.treasury.gov/ofac/downloads/sanctions/1.0/sdn_advanced.xml` — 302-redirects
+  to `sanctionslistservice.ofac.treas.gov`, then to a signed S3 URL; no auth; ~127MB. Confirmed live
+  2026-09-21.
+- **Format:** the "Advanced XML" SDN export. Parsed with a single streaming
+  `xml.etree.ElementTree.iterparse` pass (never a full in-memory DOM) — see `ingest/sanctions.py`'s
+  module docstring for the full structural detail (vessel profiles are `PartySubTypeID=1`, resolved
+  dynamically from the file's own `<ReferenceValueSets>` rather than hardcoded; IMO and designation
+  date each live in a separate top-level container, joined by `IdentityID`/`ProfileID`).
+- **Quirk:** a vessel's primary `Alias` can carry both a Latin-script and a transliterated (e.g.
+  Cyrillic) `DocumentedName`; the Latin one is preferred. A profile can carry more than one
+  `SanctionsEntry`/"Created" `EntryEvent` (93 of 19,579 real profiles did on 2026-09-21) — the
+  earliest is taken as `designation_date`.
+- **Real run 2026-09-21:** 1,540 vessels, 1,528 with a valid IMO, designation dates spanning
+  1989-01-05 to 2026-08-24, all `"day"` precision.
 
-Note: the UK moved to a single consolidated list on 2026-01-28. The former OFSI Consolidated List is
-closed and no longer updated — do not use it.
+### EU consolidated list (Financial Sanctions Files) — `fetch_eu`
+- **URL used:** `https://data.opensanctions.org/datasets/latest/eu_fsf/targets.simple.csv` — an
+  OpenSanctions mirror of the official EU FSF feed, NOT the official `webgate.ec.europa.eu`
+  endpoint (see quirk below). Confirmed reachable 2026-09-21, 307-redirects to a dated CDN URL each
+  time (the stable `data.opensanctions.org` URL is always hit fresh).
+- **Quirk (why the mirror):** the official endpoint
+  (`https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content`) returns
+  HTTP 403 without a registered access token — confirmed by direct curl and a cookie/session
+  handshake attempt on 2026-09-21, both failed. Registering for official access is out of scope for
+  this project; see `docs/DECISIONS.md` for the substitution reasoning.
+- **Format:** CSV, columns `id,schema,name,aliases,birth_date,countries,addresses,identifiers,
+  sanctions,phones,emails,program_ids,dataset,first_seen,last_seen,last_change`. Vessel rows are
+  `schema == "Vessel"`. IMO comes from the `identifiers` column (`IMO1234567`, no space, possibly
+  mixed with other identifier types, `;`-separated). Flag is the (lowercase ISO2) `countries`
+  column.
+- **Quirk:** no dedicated designation-date column — extracted by regex (`YYYY-MM-DD`, earliest if
+  several) from the free-text `sanctions` column (e.g. `"PRK - 2022/2429 (OJ L318I) - 2022-12-12"`).
+  `first_seen` is deliberately never used for this: it is OpenSanctions' own ingestion timestamp,
+  not a designation date, and using it would be a temporal leak.
+- **Real run 2026-09-21:** only 2 vessel rows in the entire feed (both North Korea-flagged, both
+  with IMO).
+
+### UK Sanctions List — `fetch_uk`
+- **URL:** `https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.csv` — confirmed reachable
+  2026-09-21, no auth, ~50MB, no redirect. The UK moved to this single consolidated list on
+  2026-01-28; the former OFSI Consolidated List is closed and no longer updated — do not use it.
+- **Format:** CSV, but the first line is `Report Date: DD-Mon-YYYY`, not the header — skipped before
+  parsing. A vessel row is `Designation Type == "Ship"` (NOT `Type of entity`, which is empty for
+  every ship row — a real trap). IMO comes from `IMO number` (usually `IMO1234567`, no space, but
+  observed WITHOUT the prefix on at least one real row).
+- **Quirk:** a single vessel (`Unique ID`) spans multiple rows — one per address line, and the name
+  itself varies row-to-row too (`Name 6`, `Name type` == `"Primary name"` for exactly one row per
+  group, `"Alias"` for the rest). Grouped by `Unique ID`; the earliest `Date Designated` across the
+  group is taken as `designation_date`, with `program` (`Regime Name`) tied to that specific row.
+- **Real run 2026-09-21:** 663 vessels, 662 with a valid IMO, designation dates spanning
+  2017-10-03 to 2026-08-06.
 
 ## Cross-checking
 

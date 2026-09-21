@@ -634,3 +634,68 @@ _2026-09-21_
     `data/detect/sts_gfw_agreement.parquet` hold the full output for a future re-check (e.g. once
     the live window advances past 2026, a global rather than Danish-only comparison, or a
     same-provider replication, could all still be worthwhile).
+
+_2026-09-21_ (P3-1 session: sanctions list ingestion)
+
+- **EU sanctions ingested from an OpenSanctions mirror, not the official `webgate.ec.europa.eu`
+  endpoint.** The official endpoint returns HTTP 403 without a registered access token — confirmed
+  by both a direct curl and a cookie/session handshake attempt, both failed the same session.
+  Registering for official access is out of scope for this project. The OpenSanctions mirror
+  (`data.opensanctions.org/datasets/latest/eu_fsf/targets.simple.csv`) republishes the same
+  official EU FSF feed, a standard practice for this kind of compliance data, and was confirmed
+  reachable with the expected schema. Documented in `ingest/sanctions.py`'s module docstring and
+  `docs/DATA_SOURCES.md`, not a silent swap.
+- **OFAC's designation date is the earliest "Created" (`EntryEventTypeID`) `EntryEvent` across all
+  of a profile's `SanctionsEntry` elements**, not e.g. the most recent one or a specific
+  programme's own date. Reason: this project's forward-looking validation needs the earliest point
+  a vessel became knowable as sanctioned; a later re-designation under an additional programme
+  should not push the label's date forward. 93 of 19,579 real profiles (confirmed 2026-09-21) carry
+  more than one `SanctionsEntry` and/or more than one "Created" event, so this was a real choice,
+  not a hypothetical one.
+- **Partial OFAC dates (year+month only, or year only) are represented as a full `date` with the
+  missing day/month defaulted to 1**, with `designation_date_precision` (`"day"`/`"month"`/
+  `"year"`) carrying the actual precision separately. Reason: `SanctionedVessel.designation_date`
+  is typed as a plain `date` (matching every other date field in this project), so a placeholder is
+  unavoidable if a day is genuinely unknown; day=1 is the least presumptive choice (does not imply
+  a specific day within the month/year actually occurred). Not exercised in the live 2026-09-21
+  OFAC snapshot (every real designation date resolved to full day precision) but implemented and
+  unit-tested, since OFAC's own XSD allows it and a future snapshot could differ.
+- **EU's designation date is extracted by regex (`YYYY-MM-DD$`-style, earliest if multiple) from
+  the free-text `sanctions` column, not read from any dedicated column** — none exists in the
+  OpenSanctions mirror's simplified export. `first_seen` was explicitly rejected as a substitute:
+  it is OpenSanctions' own ingestion timestamp, a different quantity, and using it would be exactly
+  the kind of temporal leak `CLAUDE.md` warns against (a vessel's OpenSanctions `first_seen` can
+  postdate its true EU designation by years). A row with no parseable date is logged and skipped,
+  not guessed — real run: 0 of 2 real EU vessel rows needed this fallback, but the path is
+  unit-tested.
+- **Two real, undocumented-in-the-task-spec quirks found while verifying against live data, both
+  handled defensively rather than assumed away:**
+  1. *OFAC*: a vessel's primary `Alias` can carry two `<DocumentedName>` siblings under the SAME
+     primary alias -- one Latin-script, one transliterated (confirmed on real profile 34940,
+     "Baltic Leader" / its Cyrillic transliteration, `ScriptID` 215=Latin vs 220=Cyrillic). The
+     task spec's own name-extraction path assumed exactly one `NamePartValue`. Fixed by preferring
+     the Latin-script part when more than one is present, falling back to whichever is found if
+     none is Latin -- see `ingest/sanctions._extract_ofac_vessel`.
+  2. *UK*: the vessel NAME, not just address fields, varies row-to-row within one `Unique ID`
+     group -- each row is one alias (`Name 6`), with `Name type == "Primary name"` marking exactly
+     one row per group as the vessel's real name. Fixed by using that row, falling back to the
+     group's first row if none is marked primary. Also: `IMO number` was observed WITHOUT the
+     `IMO` prefix on at least one real row (Unique ID DPR0076, `8628597`) despite the task spec
+     describing the format as always `IMO1234567` -- the prefix is stripped if present, not
+     required, mirroring how OFAC's and EU's IMO fields are already handled defensively.
+- **A real iterparse memory-management bug found and fixed before the first successful test run,
+  not caught until then:** an early version called `elem.clear()` on every non-target "end" event
+  while streaming a section (meant to bound memory), but `iterparse` fires "end" events bottom-up
+  -- so a row's own descendants (e.g. `<Identity>`, `<Alias>`) each fired their own "end" event and
+  got cleared BEFORE the enclosing row (`<Profile>`) was itself processed, wiping the very data the
+  row-level extraction function still needed to read. Fixed by only calling `elem.clear()` on the
+  row-level element itself (after extracting from it, which recursively frees its whole subtree)
+  and on the section container when it closes -- never on an intermediate descendant. Documented
+  in `ingest/sanctions.py` at each of the four affected functions so the same mistake is not
+  repeated elsewhere in this project's other streaming parsers.
+- **Real run 2026-09-21: 2,205 sanctioned vessel records landed at `data/reference/
+  sanctions.parquet`** -- OFAC 1,540 (1,528 with IMO, 37 with no flag, dates 1989-01-05 to
+  2026-08-24), EU 2 (both with IMO and flag, both 2022-12-12), UK 663 (662 with IMO, 143 with no
+  flag, dates 2017-10-03 to 2026-08-06). Every real `designation_date_precision` resolved to
+  `"day"` -- OFAC's partial-date path is implemented and unit-tested but not exercised by the
+  current live snapshot. 34 new tests, `ruff` clean.

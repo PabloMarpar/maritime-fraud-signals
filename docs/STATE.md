@@ -81,14 +81,30 @@ _Last updated: 2026-09-21_
   region/vessel-type combination to agree or disagree with), not as validation or invalidation of
   detect.sts. Full detail in `docs/DECISIONS.md`.
 
+- **P3-1 done**: `ingest/sanctions.py` — three fetchers (`fetch_ofac`, `fetch_eu`, `fetch_uk`),
+  normalised to a shared `SanctionedVessel` dataclass, landed combined at `data/reference/
+  sanctions.parquet` (`source` column distinguishes origin). OFAC parsed with a single streaming
+  `iterparse` pass (never a full DOM), the four type-IDs it depends on resolved dynamically from
+  the file's own `<ReferenceValueSets>` rather than hardcoded. EU sourced from an OpenSanctions
+  mirror of the official FSF feed (the official endpoint 403s without a registered token — see
+  `docs/DECISIONS.md`). UK's designation date/program are grouped by `Unique ID`, earliest `Date
+  Designated` wins. Real run 2026-09-21: **2,205 vessels total** — OFAC 1,540 (1,528 with IMO,
+  dates 1989-01-05..2026-08-24), EU 2 (both with IMO, both 2022-12-12), UK 663 (662 with IMO,
+  dates 2017-10-03..2026-08-06); every real `designation_date_precision` is `"day"` (OFAC's
+  partial-date path is implemented/tested but not exercised by the live snapshot). Found and fixed
+  a real iterparse memory-management bug (clearing a row's own descendants before the row itself
+  was processed) and two real quirks not in the task spec (OFAC dual-script names, UK's per-row
+  alias/IMO-prefix variance) — full detail in `docs/DECISIONS.md`. 34 new tests, 315 total, `ruff`
+  clean.
+
 ## In progress
 
-- Nothing in progress. P2-7 is fully closed.
+- Nothing in progress. P3-1 is fully closed.
 
 ## Next up
 
-1. **P3-1: ingest OFAC, EU and UK sanctions lists, capturing designation dates** is next in
-   `tasks.json` — starts Phase 3.
+1. **P3-2: join sanctions to vessels by IMO and MMSI; quantify match rate and ambiguity** is next
+   in `tasks.json`.
 
 ## Blocked
 
