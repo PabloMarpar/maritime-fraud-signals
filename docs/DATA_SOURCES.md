@@ -62,12 +62,44 @@ closed and no longer updated — do not use it.
 ### Global Fishing Watch Events API
 - **URL:** `https://globalfishingwatch.org/our-apis/`
 - **Contents:** encounters, loitering and AIS-off events computed by a third party.
-- **Access:** free token.
+- **Access:** free token, requested at `https://globalfishingwatch.org/our-apis/tokens`. Their own
+  page describes the process as: register a GFW account, request an API key, agree to the terms of
+  use (attribute GFW in any publication) and to participate in follow-up surveys. Nothing on that
+  page requires a registered legal organisation — GFW states its APIs are used by "government
+  institutions and academia to nonprofits and small technology firms", which reads as inclusive of
+  individuals/independent projects; any "organisation" field in the signup form is expected to be
+  free text, not a gate. Not yet confirmed by actually submitting the form (blocked on the
+  session that needed it not having a token — see `docs/DECISIONS.md`).
 - **Role:** independent cross-check for our own detectors, **not** a primary source. Measuring
-  agreement with their published definitions is itself a reportable result.
+  agreement with their published definitions is itself a reportable result (P2-7,
+  `detect/sts_agreement.py`).
 - **Their definitions:** an encounter is two vessels within 500 m for at least 2 hours at a median
   speed under 2 knots, at least 10 km from a coastal anchorage. Loitering is an average speed under
   2 knots at least 20 nautical miles from shore.
+- **Scope quirk:** the encounters dataset only covers vessel-type pairs GFW classifies as
+  fishing-economy activity (fishing-fishing, fishing-carrier, fishing-support, fishing-bunker,
+  tanker-fishing, carrier-bunker, support-bunker) — not every vessel encounter GFW's own AIS
+  pipeline could in principle see. `detect.sts` has no such restriction. See
+  `detect/sts_agreement.py`'s module docstring for why this matters when reading P2-7's numbers.
+- **API contract** (endpoint/auth/pagination), confirmed against live documentation on
+  2026-09-21 — see `ingest/gfw.py`'s module docstring for the full detail:
+  - `GET https://gateway.api.globalfishingwatch.org/v3/events`, `Authorization: Bearer <token>`.
+  - `datasets[0]=public-global-encounters-events:latest`, `types[0]=ENCOUNTER`,
+    `start-date`/`end-date` (`YYYY-MM-DD`), `limit`/`offset` pagination (200/page observed max).
+  - No bounding-box/geometry parameter at the raw HTTP level (GFW's SDKs support one; this
+    project calls the endpoint directly and filters client-side, see `ingest/gfw.filter_bbox`).
+  - Documented caps: 50,000 requests/day, 1,500,000/month; exceeding either returns HTTP 429.
+  - **Response JSON shape, confirmed 2026-09-21 against a live call (see `docs/DECISIONS.md`).**
+    One page: `{"entries": [...], "limit", "offset", "nextOffset", "total", "metadata"}`. Every
+    encounter is reported TWICE, mirrored, as two entries sharing an id up to a trailing
+    `.1`/`.2` suffix — but each entry already carries BOTH vessels (`vessel.ssvid` for the
+    reporting side, `encounter.vessel.ssvid` for the other), so the two are duplicates, not
+    complementary halves. The vessel-id field is `ssvid` (a string), not `mmsi`; position is
+    nested at `position.lat`/`position.lon`, not top-level. `encounter.type` (e.g.
+    `"fishing-fishing"`, `"tanker-fishing"`) carries GFW's own vessel-type-pair classification —
+    the ground truth for the scope quirk noted above, more precise than any proxy computed from
+    our own AIS ship-type field. `datasets[0]=...:latest` resolved server-side to
+    `public-global-encounters-events:v4.0` on this call.
 
 ### DTU Data — academic benchmark
 - *AIS Trajectories from Danish Waters for Abnormal Behavior Detection*

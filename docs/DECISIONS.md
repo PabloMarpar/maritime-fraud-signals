@@ -556,3 +556,81 @@ _2026-09-20_
   data this project does not have (a broader AIS feed, or a port-depth reference); both are stated
   plainly in the module docstring rather than left implicit, per `CLAUDE.md`'s instruction to state
   limitations explicitly.
+
+_2026-09-21_
+
+- **P2-7 (GFW agreement) started without a GFW API token; code built to the point of "ready to
+  run", real run deferred.** GFW requires registering a free account and requesting a token
+  (`https://globalfishingwatch.org/our-apis/tokens`); no token existed this session. Rather than
+  wait idle, `ingest/gfw.py` (fetch + normalise + bbox-filter) and `detect/sts_agreement.py`
+  (matching + agreement measurement) were written and fully unit-tested against a documented,
+  assumed API/response shape, with the real API call left for once a token exists.
+- **The GFW response JSON shape assumed while writing `ingest/gfw.py` (no token available) was
+  wrong in two concrete ways, found by the first real call once a token arrived.** The
+  documentation-research guess used `vessel.mmsi` (top-level, one side per entry, requiring the
+  two mirrored `.1`/`.2` entries to be paired) and top-level `lat`/`lon`. The real API instead
+  uses `vessel.ssvid` (a string) for the reporting side and `encounter.vessel.ssvid` for the other
+  side — both already present on a single entry, so the `.1`/`.2` entries are mirrored duplicates
+  of the same fact, not complementary halves — and nests position under `position.lat`/
+  `position.lon`. Fixed in `ingest/gfw._normalise_entry`/`normalise_entries`: de-duplicate by base
+  id, read both sides off one entry, raise `GFWSchemaError` (payload attached) if the confirmed
+  shape ever stops holding. `encounter.type` (GFW's own vessel-type-pair label, e.g.
+  `"fishing-fishing"`) is also captured now — more precise than any proxy this project could
+  compute from its own AIS ship-type field, see `docs/DATA_SOURCES.md`.
+- **Matching rule for P2-7: same unordered MMSI pair + time-window overlap (30min tolerance),
+  position NOT checked.** Two independent detectors segment episode boundaries differently
+  (`detect.sts` from 10-minute slots; GFW's own undocumented method), so requiring exact position
+  agreement would test boundary-drawing convention, not whether the two methods agree an encounter
+  happened. The tolerance is an unvalidated default, same posture as every other threshold in this
+  project.
+- **P2-7's agreement numbers must be reported split by GFW-scope, never as one headline number.**
+  GFW's encounters dataset only covers vessel-type pairs it classifies as fishing-economy activity
+  (fishing-fishing, fishing-carrier, fishing-support, fishing-bunker, tanker-fishing,
+  carrier-bunker, support-bunker); `detect.sts` has no such restriction, and P2-4's real run
+  skewed away from that population ("no Belts, few tankers"). `detect/sts_agreement.py` uses
+  `ship_type == 'Fishing'` on either side as a simplified in-scope proxy (it cannot recover GFW's
+  carrier-bunker/support-bunker subtypes from `detect.sts`'s own ship-type pairing) and reports
+  the full-set and in-scope-subset rates side by side. Low overall agreement is expected to partly
+  reflect this scope mismatch, not detector failure — the two numbers must travel together in any
+  write-up.
+- **Registering for a GFW token does not appear to require a legal organisation**, despite an
+  earlier (uncorroborated) research finding to that effect. GFW's own documentation states only:
+  register an account, request a key, agree to terms of use and attribution, participate in
+  surveys — and describes its user base as spanning "government institutions and academia to
+  nonprofits and small technology firms", with no stated exclusion of individuals. Confirmed: the
+  author registered as an individual/independent project and received a token the same session.
+- **P2-7 real run result: 0/1,689 detect.sts events agree with GFW, 0/6 GFW encounters agree with
+  detect.sts.** Full pipeline run 2026-09-21 over the real 30-day window (2024-06-01..2024-06-30):
+  - Fetched 116,966 raw global entries (GFW has no bbox filter, see `ingest/gfw.py`), normalised
+    to 58,359 unique encounters worldwide. Only **6** fall inside the project's Danish/Baltic bbox
+    (52.15-60.09N, 2.42-17.88E, a 1st/99th-percentile-plus-2-degree-margin box derived from the
+    real clean window's own lat/lon distribution) for the *entire month* — GFW's fishing-economy
+    scope (see earlier decision) barely touches this region at all, before any matching even runs.
+  - `detect/sts_agreement.build_agreement`: 0 of detect.sts's 1,689 gated events matched a GFW
+    encounter, including the 177-event subset where one side's `ship_type` is `'Fishing'` (the
+    in-scope proxy). 0 of the 6 in-bbox GFW encounters matched a detect.sts event.
+  - Of the 6 GFW encounters, 3 involve vessels never received by the DMA network at all (MIDs
+    109/258, positions near 59.6-59.9N — offshore North Sea, outside dense Danish coastal
+    coverage): those can never match by construction, not a detector failure on either side.
+  - The remaining 3 include exactly one pair BOTH sides of which DMA did receive throughout June
+    (219007313, 219004002 — both Danish-flagged, `ship_type='Fishing'`), the only case where a
+    real agreement was even possible. Investigated by hand: GFW reports this pair encountering
+    2024-06-25 05:50-08:10 (2h20m) at <=500m. DMA's own AIS for the same two MMSI over that exact
+    window shows separation starting at 374m, crossing 500m within ~15-20 minutes, and reaching
+    2,174m by the window's end — never sustaining GFW's own <=500m criterion for anywhere near
+    2 hours. detect.sts, built on DMA's data, is correct not to have gated this pair; the
+    discrepancy is between what DMA's terrestrial feed and GFW's own (blended, likely
+    multi-source/satellite-supplemented) AIS pipeline each computed as these vessels' positions
+    for the same real-world window, not a bug in the matching code or detect.sts's thresholds.
+  - **Interpretation.** The headline 0% figure is real but should not be read as "detect.sts
+    disagrees with GFW" — GFW's own dataset essentially has no opinion on this region for this
+    vessel-type scope (6 candidates all month, half not even in DMA's coverage), so there was
+    almost nothing to agree or disagree WITH. A plausible compounding factor, not verified here:
+    the EU's AIS carriage mandate exempts many smaller fishing vessels, which would suppress GFW's
+    fishing-encounter counts in Danish waters independent of any detector's behaviour. P2-7 is
+    closed as "measured, reported honestly, scope mismatch dominates the result" rather than
+    "detect.sts validated" or "detect.sts invalidated" — neither is what this comparison could
+    have shown, given GFW's own scope. `data/reference/gfw_encounters.parquet` and
+    `data/detect/sts_gfw_agreement.parquet` hold the full output for a future re-check (e.g. once
+    the live window advances past 2026, a global rather than Danish-only comparison, or a
+    same-provider replication, could all still be worthwhile).

@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-20_
+_Last updated: 2026-09-21_
 
 ## Done
 
@@ -69,14 +69,26 @@ _Last updated: 2026-09-20_
   fix from P2-1b), and ~24-30% of the course check's events being stationary-vessel COG noise (now
   gated on SOG ≥2.0kn). 13 tests, `ruff` clean. Full detail in `docs/DECISIONS.md`.
 
+- **P2-7 done**: `ingest/gfw.py` (fetch/normalise/bbox-filter GFW Events API encounters) +
+  `detect/sts_agreement.py` (matching + agreement measurement against `detect.sts`), 26 tests,
+  `ruff` clean. Real run over the 30-day window: 116,966 raw global entries -> 58,359 unique GFW
+  encounters worldwide, only 6 inside the Danish/Baltic bbox for the whole month. Agreement: 0/1,689
+  detect.sts events matched (0/177 in the fishing-ship-type subset), 0/6 GFW encounters matched.
+  Investigated the one shared-vessel-pair case by hand: DMA's own AIS shows the pair drifting from
+  374m to 2,174m apart across GFW's reported ~2h20m encounter window, never sustaining GFW's own
+  <=500m criterion — a cross-provider position discrepancy, not a code or threshold bug. Headline
+  reads as "scope mismatch dominates" (GFW's fishing-economy dataset has almost no data in this
+  region/vessel-type combination to agree or disagree with), not as validation or invalidation of
+  detect.sts. Full detail in `docs/DECISIONS.md`.
+
 ## In progress
 
-- Nothing in progress. P2-6 is fully closed.
+- Nothing in progress. P2-7 is fully closed.
 
 ## Next up
 
-1. **P2-7: measure agreement of detector 3 (ship-to-ship transfers) against the GFW Events API**
-   is next in `tasks.json`.
+1. **P3-1: ingest OFAC, EU and UK sanctions lists, capturing designation dates** is next in
+   `tasks.json` — starts Phase 3.
 
 ## Blocked
 
@@ -84,6 +96,11 @@ _Last updated: 2026-09-20_
 
 ## Open questions
 
+- **P2-7's near-zero GFW overlap is plausibly compounded by the EU AIS carriage mandate exempting
+  many smaller fishing vessels, and by GFW's own AIS feed disagreeing with DMA's on at least one
+  real vessel pair's positions** — neither is verified here (see `docs/DECISIONS.md`'s P2-7 entry
+  for the one case investigated by hand). Not urgent to chase further unless a future task needs
+  to lean on GFW agreement as evidence.
 - **`detect/behaviour.py`'s `draught_change_unexplained` checks only the two voyage-boundary
   positions for corroborating evidence, never the interior of the gap, and has no upper bound on
   gap length** — the real run's flagged gaps run a median ~5 days (117h), p90 ~13 days (307h), with
