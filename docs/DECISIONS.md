@@ -1106,3 +1106,52 @@ _2026-09-22_ (P3-4/A3 session)
   count exactly, a real-data sanity check that thinning lost no vessel. Reduction ratio: 14.2 GB of
   clean data for the window down to 452 MB (~3.2%), the same order of magnitude as every other
   P3-4 storage reduction (see `docs/STATE.md`'s disk-budget section).
+
+_2026-09-22_ (P3-4/A4 session)
+
+- **P3-4/A4 done: `pipeline/window.py`, the per-window orchestrator -- creates only, never
+  deletes.** `process_window(start, end, data_root, lead_in_days=30, min_free_gb, thin_minutes,
+  force, dry_run)` runs, in order: `pipeline.backfill.backfill_range` and
+  `detect.liveness.build_liveness` over `[start - lead_in_days, end]` (the lead-in is needed
+  because liveness's own baseline looks backward `BASELINE_DAYS`, default 30, matched by this
+  module's own default); then, over `[start, end]` only, `process.thin`, `process.ship_type`,
+  `process.tracks`, `process.identity`, and the five detectors in their real dependency order
+  (`anchorages` -> `spoofing`/`sts` -> `behaviour` -> `identity_anomalies`); then
+  `_verify_window()` reads every artifact back with DuckDB (never just checks a file exists --
+  A0.9) and returns a list of failures; only if that list is empty does it record an A0.3
+  fingerprint (message count, distinct mmsi, timestamp range, bbox) and `verified_at` per day in
+  `[start, end]` via `pipeline.manifest` -- the field `pipeline.prune` (A5, not yet built) will
+  select on. A verification failure raises and writes nothing to the manifest; there is no
+  partial-credit path.
+- **Every downstream path is derived from `data_root`, not from each module's own hardcoded
+  default constant.** Every producer module already accepts its root paths as overridable
+  parameters (for its own tests' sake); `pipeline.window` passes an explicit override for every
+  one of them, computed from `data_root` to mirror what each module's own default already is
+  under `data_root=Path("data")`. This is what makes the whole orchestrator testable against
+  `tmp_path` (9 unit tests, monkeypatching every downstream builder with a fake, the same pattern
+  `tests/test_backfill.py` already uses) without needing to monkeypatch a dozen module-level
+  constants, and it is also the only way a future non-default `data_root` could work at all.
+- **A real-data bug found and fixed before trusting the fingerprint: raw `min`/`max` lat/lon
+  produces a near-useless bbox, swamped by `process.clean`'s already-documented handful of
+  corrupted-coordinate outliers (up to 89 deg latitude, see this file's P2-3 entry).** A real run
+  over 2024-06-10..11 first produced `[-55.48, 64.13, -157.23, 123.7]` for a single Danish day --
+  nearly the whole globe, useless as a re-download sanity check. Fixed by reusing
+  `detect.spoofing`'s own already-proven fix for the identical problem: tail quantiles
+  (`quantile_cont` at 0.1%/99.9%) instead of raw min/max. Re-run after the fix:
+  `[54.14, 58.9, 3.46, 16.18]` and `[54.13, 58.53, 3.46, 16.11]` for the same two days --
+  correctly the Danish/Baltic region, not the globe.
+- **Real end-to-end validation run, 2024-06-10..2024-06-11 (`--lead-in-days 5`, so no new
+  downloads -- the lead-in and window both fall entirely inside the already-backfilled
+  2024-06-01..2024-06-30 month), with all real builders, not fakes.** Exercised the full real
+  chain including the DuckDB spatial extension (`detect.anchorages`/`detect.sts`/
+  `detect.behaviour`): 199 anchorage cells (all coastal), 509,726 spoofing events (dominated by
+  `on_land`, 509,390, consistent with the dwell-time explanation already established for P2-3),
+  55 STS candidates (mean confidence 0.384), 13 behaviour-contradiction events, 17
+  identity-anomaly events -- all in the same real-data proportions as the full 30-day run,
+  scaled down. `_verify_window` passed, both days got `verified_at` + fingerprint. A second run
+  over the same window (no `--force`) confirmed idempotency end to end: every producer logged
+  "already exists, skipping" and the window still re-verified and re-recorded cleanly. Wall-clock
+  ~11 minutes, dominated by `check_on_land` (328.9s, consistent with its known per-day cost) and
+  a large gap before `detect.sts`'s first logged stage (likely first-use `INSTALL`/`LOAD spatial`
+  overhead, not investigated further -- out of scope for an orchestration task). 9 new tests, 399
+  total, `ruff` clean.

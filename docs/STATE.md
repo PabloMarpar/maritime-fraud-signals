@@ -220,12 +220,32 @@ real day measured first (18 MB/day) confirmed the default 5-minute interval stay
 plan's 10-25 MB/day budget, so it was not widened. 9 new tests, 390 total, `ruff` clean. Full
 detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A3" entry.
 
+**A4 done 2026-09-22**: `pipeline/window.py` -- the per-window orchestrator, creates only, never
+deletes. `process_window` runs backfill + `detect.liveness` over `[start - lead_in_days, end]`
+(lead-in default 30, matching liveness's own baseline), then over `[start, end]` only:
+`process.thin`, `process.ship_type`, `process.tracks`, `process.identity`, and the five detectors
+in real dependency order (`anchorages` -> `spoofing`/`sts` -> `behaviour` -> `identity_anomalies`).
+`_verify_window()` reads every artifact back with DuckDB (never just checks a file exists) and
+returns a failure list; only if empty does it record an A0.3 fingerprint + `verified_at` per day
+in `[start, end]` via `pipeline.manifest` -- the field `pipeline.prune` (A5) will select on. Every
+downstream path is derived from `data_root`, not each module's hardcoded default, which is what
+makes the whole cycle testable against `tmp_path` by monkeypatching every downstream builder (9
+new tests, 399 total, `ruff` clean). A real bug found and fixed before trusting the fingerprint:
+raw min/max lat/lon produced a near-useless bbox (`[-55, 64, -157, 123]`, nearly the whole globe)
+swamped by `process.clean`'s already-documented corrupted-coordinate outliers -- fixed by reusing
+`detect.spoofing`'s own tail-quantile bbox crop. A real end-to-end run over 2024-06-10..2024-06-11
+(no new downloads -- inside the already-backfilled month) exercised every real builder including
+the spatial extension, verified and recorded both days, and a second run without `--force`
+confirmed full idempotency. Full detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A4" entry.
+
 ## Next up
 
-**P3-4/A4**: `pipeline/window.py` -- orchestrates the whole per-window build (backfill -> liveness
--> thin/ship_type/tracks/identity -> detectors -> `_verify_window()` -> fingerprint + mark
-`verified_at`), creates only, never deletes. After A4: **A5** (`pipeline/prune.py`, deletes with
-quarantine -- gated on the A0.4 re-download drill, not yet run).
+**P3-4/A5**: `pipeline/prune.py` -- deletes with quarantine (`.trash`, emptied only on the next
+invocation for already-completed windows), per-day fingerprints already written by A4, a
+`.no-prune` kill switch, `--max-days` cap, `--yes-delete` opt-in (dry-run by default), and every
+gate re-evaluated at deletion time. **Gated on the A0.4 re-download drill (delete one day,
+re-fetch, verify the fingerprint matches), not yet run** -- must pass before any deletion is
+trusted, per the plan's own ordering.
 
 **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
 
@@ -368,7 +388,9 @@ their legacy single-file counterpart (same "both present until A5 prunes" postur
 liveness migration) — measured real total ~115 MB added (dominated by `spoofing/`'s 109 MB,
 matching its on_land-heavy legacy file), well within budget. Post-P3-4/A3, `data/tracks/thin/`
 holds 30 real day-partitions at the default 5-minute interval, 452 MB total (~18 MB/day) — no
-legacy counterpart, this is a wholly new artifact. One raw day
+legacy counterpart, this is a wholly new artifact. Post-P3-4/A4, a second, smaller real window
+(`window=2024-06-10_2024-06-11`) exists alongside the whole-month one in every window-partitioned
+tree, from `pipeline.window`'s own end-to-end validation run — ~6.7 MB total, negligible. One raw day
 ≈ 507 MB, discarded immediately after cleaning by `pipeline/backfill.py`. Phase 3-4's "years of
 depth" requirement (several validation cutoffs `T`, each needing data before and after) should
 still be met by **sampling short windows around each cutoff**, not downloading every day, and
