@@ -244,7 +244,7 @@ def test_destination_course_mismatch_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222333
     rows = _course_points(
@@ -260,9 +260,9 @@ def test_destination_course_mismatch_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     events = _read_events(out_path)
@@ -284,7 +284,7 @@ def test_destination_course_match_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222444
     rows = _course_points(
@@ -299,9 +299,9 @@ def test_destination_course_match_not_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -315,7 +315,7 @@ def test_destination_unmatched_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222555
     rows = _course_points(
@@ -331,9 +331,9 @@ def test_destination_unmatched_not_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -347,7 +347,7 @@ def test_no_valid_imo_excluded(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222666
     rows = _course_points(
@@ -362,9 +362,9 @@ def test_no_valid_imo_excluded(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -380,7 +380,7 @@ def test_stationary_vessel_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222777
     rows = _course_points(
@@ -396,9 +396,9 @@ def test_stationary_vessel_not_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -435,7 +435,7 @@ def test_draught_change_unexplained_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444555666
 
     in_root, voyages_path, _v1_end, _v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 10.0)
@@ -443,9 +443,9 @@ def test_draught_change_unexplained_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     events = _read_events(out_path)
@@ -462,7 +462,7 @@ def test_draught_change_below_threshold_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444555777
 
     in_root, voyages_path, _v1_end, _v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 6.0)
@@ -470,9 +470,9 @@ def test_draught_change_below_threshold_not_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -485,7 +485,7 @@ def test_draught_change_explained_by_anchorage_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444555888
 
     in_root, voyages_path, _v1_end, _v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 10.0)
@@ -494,9 +494,9 @@ def test_draught_change_explained_by_anchorage_not_flagged(tmp_path):
     _write_anchorages(anchorages_path, [(57.0, 5.0, [mmsi, *OTHER_MMSI[:5]], True)])
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -511,7 +511,7 @@ def test_draught_change_anchorage_self_membership_not_exonerating(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444555990
 
     in_root, voyages_path, _v1_end, _v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 10.0)
@@ -521,9 +521,9 @@ def test_draught_change_anchorage_self_membership_not_exonerating(tmp_path):
     _write_anchorages(anchorages_path, [(57.0, 5.0, [mmsi, *OTHER_MMSI[:4]], True)])
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     events = _read_events(out_path)
@@ -537,7 +537,7 @@ def test_draught_change_explained_by_sts_not_flagged(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444555999
 
     in_root, voyages_path, v1_end, v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 10.0)
@@ -545,9 +545,9 @@ def test_draught_change_explained_by_sts_not_flagged(tmp_path):
     _write_empty_anchorages(anchorages_path)
     _write_sts(sts_path, [(mmsi, 999888777, v1_end, v2_start)])
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     assert _read_events(out_path) == []
@@ -561,7 +561,7 @@ def test_draught_change_knowable_at_is_window_end_even_with_long_next_voyage(tmp
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
     mmsi = 444556000
 
     in_root = tmp_path / "clean" / "ais_dk"
@@ -580,9 +580,9 @@ def test_draught_change_knowable_at_is_window_end_even_with_long_next_voyage(tmp
     _write_empty_anchorages(anchorages_path)
     _write_empty_sts(sts_path)
 
-    behaviour.build_behaviour_events(
+    out_path = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
 
     events = _read_events(out_path)
@@ -599,7 +599,7 @@ def test_idempotent_skips_existing_output(tmp_path):
     ports_path = tmp_path / "ports.parquet"
     anchorages_path = tmp_path / "anchorages.parquet"
     sts_path = tmp_path / "sts.parquet"
-    out_path = tmp_path / "behaviour.parquet"
+    out_root = tmp_path / "behaviour"
 
     mmsi = 111222999
     rows = _course_points(
@@ -616,12 +616,12 @@ def test_idempotent_skips_existing_output(tmp_path):
 
     result1 = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
     mtime1 = result1.stat().st_mtime
     result2 = behaviour.build_behaviour_events(
         DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
-        anchorages_path=anchorages_path, sts_path=sts_path, out_path=out_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
     )
     assert result2 == result1
     assert result2.stat().st_mtime == mtime1
@@ -636,5 +636,5 @@ def test_missing_voyages_raises(tmp_path):
         behaviour.build_behaviour_events(
             DAY, DAY, in_root=in_root, voyages_path=tmp_path / "missing_voyages.parquet",
             ports_path=tmp_path / "ports.parquet", anchorages_path=tmp_path / "anchorages.parquet",
-            sts_path=tmp_path / "sts.parquet", out_path=tmp_path / "behaviour.parquet",
+            sts_path=tmp_path / "sts.parquet", out_root=tmp_path / "behaviour",
         )

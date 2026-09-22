@@ -179,26 +179,33 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
 
-from detect.anchorages import ANCHORAGES_PATH, MIN_DISTINCT_VESSELS
+from detect.anchorages import ANCHORAGES_GLOB, MIN_DISTINCT_VESSELS
 from detect.liveness import MOBILE_TYPES
-from detect.sts import STS_PATH
+from detect.sts import STS_GLOB
 from ingest.ports import PORTS_PATH
 from process.identity import VALID_IMO_SQL
-from process.partitions import existing_partitions
-from process.tracks import DEFAULT_GAP_HOURS, VOYAGES_PATH
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    git_sha,
+    partition_exists,
+    window_partition_path,
+)
+from process.tracks import DEFAULT_GAP_HOURS, VOYAGES_GLOB
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
-BEHAVIOUR_PATH = DETECT_ROOT / "behaviour.parquet"
+# data/detect/behaviour/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) --
+# see build_behaviour_events. Legacy single-file layout was data/detect/behaviour.parquet.
+BEHAVIOUR_ROOT = DETECT_ROOT / "behaviour"
 
 # Check 1: destination vs course. Unvalidated defaults -- see module docstring.
 BBOX_OUTLIER_QUANTILE = 0.001
@@ -225,24 +232,6 @@ ANCHORAGE_EVIDENCE_RADIUS_M = 10_000.0
 # _ANCHORAGE_MIN_OTHER_VESSELS reuses, for the same reason -- see module docstring.
 _ANCHORAGE_MIN_OTHER_VESSELS = MIN_DISTINCT_VESSELS
 
-
-def _git_sha() -> str:
-    """Short git commit SHA of the working tree, or "unknown" if it can't be determined.
-
-    Provenance metadata only, never correctness-critical, so any failure (not a git repo, git
-    not on PATH, etc.) falls back to a literal string rather than raising.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
 
 
 def _normalize_text_sql(col: str) -> str:
@@ -692,23 +681,28 @@ def build_behaviour_events(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    voyages_path: Path = VOYAGES_PATH,
+    voyages_path: Path = VOYAGES_GLOB,
     ports_path: Path = PORTS_PATH,
-    anchorages_path: Path = ANCHORAGES_PATH,
-    sts_path: Path = STS_PATH,
-    out_path: Path = BEHAVIOUR_PATH,
+    anchorages_path: Path = ANCHORAGES_GLOB,
+    sts_path: Path = STS_GLOB,
+    out_root: Path = BEHAVIOUR_ROOT,
     force: bool = False,
 ) -> Path:
-    """Run both declared-behaviour checks over [start, end] (inclusive) and write out_path.
+    """Run both declared-behaviour checks over [start, end] (inclusive) and write to
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError naming what builds each missing input -- no clean
-    partitions in range: process.clean.clean_range; missing voyages_path:
-    process.tracks.reconstruct_range; missing ports_path: ingest.ports.build_ports; missing
-    anchorages_path: detect.anchorages.build_anchorages; missing sts_path: detect.sts.build_sts_events.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError naming what builds each missing input -- no clean partitions in range:
+    process.clean.clean_range; missing voyages_path: process.tracks.reconstruct_range; missing
+    ports_path: ingest.ports.build_ports; missing anchorages_path:
+    detect.anchorages.build_anchorages; missing sts_path: detect.sts.build_sts_events.
+    voyages_path/anchorages_path/sts_path each default to a glob over every window built so far.
 
     Opens exactly one DuckDB connection and reuses it across both checks.
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
@@ -721,17 +715,17 @@ def build_behaviour_events(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under "
             f"{in_root}; run process.clean.clean_range first"
         )
-    if not voyages_path.exists():
+    if not partition_exists(voyages_path):
         raise FileNotFoundError(
             f"No voyages table at {voyages_path}; run process.tracks.reconstruct_range first"
         )
     if not ports_path.exists():
         raise FileNotFoundError(f"No ports table at {ports_path}; run ingest.ports.build_ports first")
-    if not anchorages_path.exists():
+    if not partition_exists(anchorages_path):
         raise FileNotFoundError(
             f"No anchorage mask at {anchorages_path}; run detect.anchorages.build_anchorages first"
         )
-    if not sts_path.exists():
+    if not partition_exists(sts_path):
         raise FileNotFoundError(f"No STS table at {sts_path}; run detect.sts.build_sts_events first")
 
     con = duckdb.connect()
@@ -785,7 +779,7 @@ def build_behaviour_events(
         )
 
         built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
+        sha = git_sha()
         con.execute(f"CREATE OR REPLACE TEMP TABLE _behaviour_events ({_BEHAVIOUR_EVENTS_DDL})")
         if events:
             con.executemany(
@@ -807,15 +801,15 @@ def build_behaviour_events(
                 ],
             )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
+        atomic_write_parquet(
+            con,
+            "SELECT *, "
             f"DATE '{start.isoformat()}' AS window_start, "
             f"DATE '{end.isoformat()}' AS window_end, "
             f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM _behaviour_events ORDER BY mmsi, knowable_at, kind) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
+            f"'{sha}' AS git_sha "
+            "FROM _behaviour_events ORDER BY mmsi, knowable_at, kind",
+            out_path,
         )
     finally:
         con.close()
@@ -833,15 +827,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--voyages-path", default=str(VOYAGES_PATH), help="Path to the voyages table"
+        "--voyages-path",
+        default=str(VOYAGES_GLOB),
+        help="Path or glob for the voyages table(s)",
     )
     parser.add_argument("--ports-path", default=str(PORTS_PATH), help="Path to the ports table")
     parser.add_argument(
-        "--anchorages-path", default=str(ANCHORAGES_PATH), help="Path to the anchorage mask"
+        "--anchorages-path",
+        default=str(ANCHORAGES_GLOB),
+        help="Path or glob for the anchorage mask(s)",
     )
-    parser.add_argument("--sts-path", default=str(STS_PATH), help="Path to the STS events table")
     parser.add_argument(
-        "--out-path", default=str(BEHAVIOUR_PATH), help="Output path for the behaviour events"
+        "--sts-path",
+        default=str(STS_GLOB),
+        help="Path or glob for the STS events table(s)",
+    )
+    parser.add_argument(
+        "--out-root",
+        default=str(BEHAVIOUR_ROOT),
+        help="Root directory for window-partitioned behaviour-events output",
     )
     parser.add_argument(
         "--force", action="store_true", help="Rebuild even if the output already exists"
@@ -862,7 +866,7 @@ def main(argv: list[str] | None = None) -> None:
         ports_path=Path(args.ports_path),
         anchorages_path=Path(args.anchorages_path),
         sts_path=Path(args.sts_path),
-        out_path=Path(args.out_path),
+        out_root=Path(args.out_root),
         force=args.force,
     )
 
