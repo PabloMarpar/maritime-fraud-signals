@@ -1155,3 +1155,91 @@ _2026-09-22_ (P3-4/A4 session)
   a large gap before `detect.sts`'s first logged stage (likely first-use `INSTALL`/`LOAD spatial`
   overhead, not investigated further -- out of scope for an orchestration task). 9 new tests, 399
   total, `ruff` clean.
+
+_2026-09-22_ (P3-4/A5: the A0.4 re-download drill, then `pipeline/prune.py`)
+
+- **A0.4 re-download drill PASSED: real fingerprint match, byte-for-byte, on 2024-06-15.** Chosen
+  as an ordinary mid-month Wednesday already `clean` in the manifest, not touching the two edge
+  days (06-01, 06-30) or the days already used by A4's own real validation window (06-10/06-11).
+  Quarantined `data/clean/ais_dk/date=2024-06-15/` to `data/.trash/date=2024-06-15/` (same-
+  filesystem rename), re-downloaded via `ingest.dma.download_day` and re-cleaned via
+  `process.clean.clean_day` into a fresh partition at the same path, then compared A0.3
+  fingerprints (`pipeline.window._day_fingerprint`, reused verbatim rather than reinventing the
+  query) on both copies. **Exact match on every field**: `fingerprint_message_count` 10,839,896,
+  `fingerprint_n_distinct_mmsi` 5,085, timestamp range `2024-06-15T00:00:00`..`23:59:58`, bbox
+  `[53.94, 58.28, 4.49, 17.68]` -- identical to 12 decimal-rounded places on both sides, and
+  `clean_rows`/`raw_rows` also matched the original manifest entry exactly (10,839,896 /
+  19,279,718). **Conclusion: the DMA S3 archive is stable for re-download; the whole
+  quarantine-then-delete strategy is verifiable in practice, not just in principle.** Per the
+  plan's own A0.3 note, `sum(message_count)` collapses to the same `count(*)` already aliased
+  `message_count` in `_day_fingerprint` -- the clean schema has no separate per-row message-count
+  field to sum, so reusing the existing fingerprint function satisfies the spirit of the check
+  without inventing a second, redundant query.
+- **The download itself was NOT reliable this session -- three of four attempts timed out
+  mid-transfer** (`httpx.ReadTimeout`, once at ~60s default client timeout, twice more even at a
+  300s read timeout, after 89-181 MB of a ~189 MB zip had already streamed). Not reproduced as a
+  server-side outage (each retry from byte zero eventually succeeded, including the one that
+  passed), so read as this session's network being flaky against the S3 endpoint, not a DMA-side
+  problem -- but real, not hypothetical: a production `pipeline.window`/`pipeline.prune` run over
+  many days should expect to retry a download at least once. `ingest.dma.download_day` has no
+  built-in retry logic today (a single `httpx.Client(timeout=60.0)` call, no backoff) -- not fixed
+  here (out of scope for A5), flagged in `docs/STATE.md`'s open questions.
+- **`pipeline/prune.py` done.** `prune(data_root, max_days=15, yes_delete=False)`, dry-run by
+  default. Selects candidate days (`verified_at` present, `clean_discarded_at` absent) from the
+  manifest, capped at `max_days`, then groups them into maximal CONTIGUOUS runs -- the manifest
+  records `verified_at`/the A0.3 fingerprint per DAY with no window boundary alongside it, so a
+  run's own `(min day, max day)` is used to locate the exact `window=<start>_<end>` artifact
+  `pipeline.window` would have written for that call, since a single `process_window` call's days
+  are always contiguous. Verified against the real manifest: only 2024-06-10/06-11 currently carry
+  `verified_at` (from A4's own validation run), and they form exactly one contiguous run matching
+  the real `window=2024-06-10_2024-06-11` artifacts on disk -- confirms the grouping strategy
+  works on real data, not just synthetic fixtures.
+- **Every A5 gate re-implemented to re-read the artifacts, never trust the manifest's earlier
+  `verified_at`**: window-partitioned artifacts (ship_type, anchorages, spoofing, sts, behaviour,
+  identity_anomalies) opened by exact path plus a `window_start`/`window_end` column cross-check
+  where the artifact carries those columns (voyages/identity don't -- see `process/tracks.py`/
+  `process/identity.py`, neither writes them, so provenance for those two rests on the path alone,
+  which already encodes the window); day-partitioned artifacts (liveness, thin) checked directly,
+  independent of any window's boundaries, since neither is ever discarded by this module; fresh
+  `count(DISTINCT mmsi)` comparison (thin >= 95% of clean) and day-count comparison (thin days ==
+  clean days) computed from the files, not from any prior run's numbers; free disk, `.no-prune`,
+  and `--yes-delete` checked at deletion time, not build time. A gate failing for one contiguous
+  run blocks only that run's days, not the whole invocation -- an independent run (e.g. a
+  different sampled window elsewhere in the manifest) is unaffected, covered by
+  `test_one_group_failing_does_not_block_an_independent_group`.
+- **Statistical sanity gate compares each window-partitioned event table's per-day rate against
+  the real June 2024 totals already in `docs/STATE.md` (impossible_speed, on_land, synthetic_
+  circle, simultaneous_position, sts, identity_anomalies, behaviour -- 7 of the plan's 8 named
+  checks), flagging a >10x deviation in either direction.** `detect.gaps` is the one named check
+  NOT covered: it is still a single legacy whole-range file (`data/detect/gaps.parquet`, never
+  window-partitioned -- P3-4/A2 deliberately left it as a `pipeline.window` consumer, not a
+  producer, see this file's A2 entry), so there is no per-window gap count for `pipeline.prune` to
+  compare against a per-day rate. Logged once per run rather than silently absent; not fixed here
+  since converting `detect.gaps` to window-partitioned output is outside A5's scope.
+- **Quarantine-then-empty (A0.2) implemented as: `_empty_trash` always runs before any new day is
+  quarantined in the same call, and only removes a `.trash` entry once `pipeline.manifest.
+  day_state` reports `"reduced"` for that day** (i.e. `clean_discarded_at` is actually on record,
+  not merely attempted) -- so a day this very invocation quarantines can never also be the one
+  permanently emptied by it; real emptying happens only on the invocation after, exactly as A0.2
+  specifies. An entry whose manifest state is anything else (a crash between the rename and the
+  `manifest.record` call) is left in `.trash` untouched and logged loudly, not guessed about.
+- **Manifest backup (`data/manifest.json.bak`) happens unconditionally, before the `.no-prune`
+  check's `return` is the only thing that can skip it** -- i.e. `.no-prune` skips EVERYTHING
+  including the backup (nothing is touched at all, per the plan's literal wording), but a dry run
+  (`yes_delete=False`) still backs up the manifest, matching the plan's own step ordering (abort
+  check, then backup, then everything else, all before the yes_delete branch).
+- **30 new tests** (`tests/test_prune.py`, all synthetic `tmp_path` fixtures, most disabling the
+  statistical sanity gate via `monkeypatch.setattr(prune, "REFERENCE_EVENT_RATES_PER_DAY", {})` so
+  other gates' fixtures don't also need real-scale event counts -- the sanity gate itself gets
+  dedicated tests with a small explicit reference dict) cover: happy path (prune with
+  `--yes-delete`), dry run touches nothing, `.no-prune` aborts with nothing touched (not even the
+  manifest backup), `--max-days` caps candidates to the earliest N, each of the 11 gates failing
+  independently blocks only its own day/run (missing artifact, unreadable artifact, empty required
+  artifact, zero-row event detectors NOT blocking, missing/mismatched thin day count, thin mmsi
+  ratio below/at the 95% threshold, incomplete/complete liveness lead-in, missing fingerprint
+  field, provenance mismatch, low/sufficient free disk, statistical sanity deviation below/above/
+  within 10x in both directions), one group failing does not block an independent group, `.trash`
+  emptying (confirmed-reduced entries removed, dry-run leaves them, unconfirmed entries always left
+  alone, this invocation's own quarantine survives until the next), and selection edge cases
+  (already-reduced day is not a candidate, a day without `verified_at` is not a candidate, no
+  candidates is a clean no-op). 429 total, `ruff` clean.

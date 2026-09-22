@@ -178,42 +178,52 @@ _Last updated: 2026-09-22_
   detectors work" -- four of five families show no rescuable signal here; the README's limitations
   section must say so plainly.** 360 tests pass (13 new), `ruff` clean.
 
-## In progress
-
-**P3-4, Part A: per-window storage pipeline. A1-A4 done 2026-09-22, A5 not started.** Full spec:
-`docs/PLAN_P4-0_P3-4.md`. Full real numbers and every bug found/fixed for each sub-part are in
-`docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A4" entries; headline only, here:
-
-- **A1**: `detect/liveness.py` writes liveness day-partitioned (`date=.../part-0.parquet`),
-  including the critical baseline-denominator fix (disjoint-coverage span was silently biasing
-  verdicts toward `no_evidence`). Verified byte-for-byte against the existing legacy artifacts.
-- **A2**: every detector + `process/tracks.py`/`process/identity.py` write window-partitioned
-  (`window=<start>_<end>/part-0.parquet`) instead of one whole-range file the next window
-  overwrote. New `process/ship_type.py` fixes the ship_type hard blocker. Real-window equivalence
-  check passed for all 9 real builds against the legacy artifacts (row-for-row, modulo two known
-  pre-existing non-deterministic tie-breaks, not regressions -- see open questions).
-- **A3**: `process/thin.py`, day-partitioned downsampled tracks (~5min buckets) for the Phase 5
-  map only, never re-detection. Real 30-day run: 452 MB, 21,146 distinct mmsi (matches the panel's
-  roster exactly).
-- **A4**: `pipeline/window.py`, the per-window orchestrator (creates only, never deletes) --
-  backfill+liveness over the lead-in range, then thin/ship_type/tracks/identity/detectors over the
-  window itself, `_verify_window()` reads every artifact back with DuckDB, records a fingerprint +
-  `verified_at` per day only if all pass. Validated end to end against real data, including a
-  `--force`-less re-run confirming full idempotency. Fixed a real bug: raw min/max bbox was
-  swamped by known corrupted-coordinate outliers -- now uses `detect.spoofing`'s own tail-quantile
-  crop.
-- 399 tests total, `ruff` clean throughout.
+- **P3-4 done: the full per-window storage pipeline, A1-A5, all 2026-09-22.** Full spec:
+  `docs/PLAN_P4-0_P3-4.md`. Full real numbers and every bug found/fixed for each sub-part are in
+  `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A5" entries; headline only, here:
+  - **A1**: `detect/liveness.py` writes liveness day-partitioned (`date=.../part-0.parquet`),
+    including the critical baseline-denominator fix (disjoint-coverage span was silently biasing
+    verdicts toward `no_evidence`). Verified byte-for-byte against the existing legacy artifacts.
+  - **A2**: every detector + `process/tracks.py`/`process/identity.py` write window-partitioned
+    (`window=<start>_<end>/part-0.parquet`) instead of one whole-range file the next window
+    overwrote. New `process/ship_type.py` fixes the ship_type hard blocker. Real-window
+    equivalence check passed for all 9 real builds against the legacy artifacts (row-for-row,
+    modulo two known pre-existing non-deterministic tie-breaks, not regressions -- see open
+    questions). `detect/gaps.py` deliberately NOT converted (the plan's own consumer, not
+    producer, list) -- stays a single legacy whole-range file.
+  - **A3**: `process/thin.py`, day-partitioned downsampled tracks (~5min buckets) for the Phase 5
+    map only, never re-detection. Real 30-day run: 452 MB, 21,146 distinct mmsi (matches the
+    panel's roster exactly).
+  - **A4**: `pipeline/window.py`, the per-window orchestrator (creates only, never deletes) --
+    backfill+liveness over the lead-in range, then thin/ship_type/tracks/identity/detectors over
+    the window itself, `_verify_window()` reads every artifact back with DuckDB, records a
+    fingerprint + `verified_at` per day only if all pass. Validated end to end against real data,
+    including a `--force`-less re-run confirming full idempotency. Fixed a real bug: raw min/max
+    bbox was swamped by known corrupted-coordinate outliers -- now uses `detect.spoofing`'s own
+    tail-quantile crop.
+  - **A5**: **A0.4 re-download drill PASSED first (the mandatory gate)** -- 2024-06-15 quarantined
+    to `.trash`, re-downloaded, re-cleaned, A0.3 fingerprint matched exactly on both copies
+    (10,839,896 rows, 5,085 distinct mmsi, identical timestamp range and bbox); the DMA S3 archive
+    is confirmed stable for re-download in practice, not just in principle. (The download itself
+    needed 4 attempts this session due to `httpx.ReadTimeout`s unrelated to the drill's outcome --
+    see open questions.) `pipeline/prune.py` then built: dry-run by default, `--yes-delete` opt-in,
+    `.no-prune` kill switch, `--max-days` cap, manifest backed up before every run,
+    quarantine-then-empty-next-invocation for `.trash` (A0.2). Candidate days (`verified_at`
+    present, `clean_discarded_at` absent) are grouped into maximal contiguous runs to locate the
+    exact `window=<start>_<end>` artifact each gate re-reads (the manifest carries `verified_at`
+    per DAY with no window boundary alongside it) -- confirmed against the real manifest, where
+    only 2024-06-10/06-11 carry `verified_at` and form exactly the real
+    `window=2024-06-10_2024-06-11` artifact set. Every gate re-reads the artifacts fresh (never
+    trusts the earlier `verified_at`), including a statistical sanity gate comparing each
+    window's per-day event rate against the real June 2024 totals (7 of the plan's 8 named checks
+    -- `detect.gaps` can't be included, see A2 above). Real dry-run smoke test against `data/`
+    (never `--yes-delete`): the default 30-day lead-in correctly blocks 2024-06-10/06-11 (not
+    enough real prior data exists before 2024-06-01); a 5-day lead-in that fits inside the real
+    backfilled month passes every gate cleanly. 30 new tests, 429 total, `ruff` clean throughout.
 
 ## Next up
 
-**P3-4/A5**: `pipeline/prune.py` -- deletes with quarantine (`.trash`, emptied only on the next
-invocation for already-completed windows), per-day fingerprints already written by A4, a
-`.no-prune` kill switch, `--max-days` cap, `--yes-delete` opt-in (dry-run by default), and every
-gate re-evaluated at deletion time. **Gated on the A0.4 re-download drill (delete one day,
-re-fetch, verify the fingerprint matches), not yet run** -- must pass before any deletion is
-trusted, per the plan's own ordering.
-
-**P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
+**P4-1 (naive baseline)** stays blocked on the vessel-age open question below.
 
 ## Blocked
 
@@ -221,6 +231,14 @@ trusted, per the plan's own ordering.
 
 ## Open questions
 
+- **`ingest/dma.py`'s `download_day` has no retry/backoff logic and a fixed default client
+  timeout, so a mid-transfer `httpx.ReadTimeout` fails the whole day outright.** Confirmed real
+  during P3-4/A5's A0.4 drill (2026-09-22): re-downloading a single real day (2024-06-15, ~189 MB
+  zip) needed 4 attempts before one succeeded, including two failures even at a 300s read timeout
+  after 89-181 MB had already streamed -- read as this session's network being flaky against the
+  S3 endpoint, not a DMA-side outage (every retry from byte zero eventually succeeded). Worth a
+  retry wrapper (e.g. a handful of attempts with backoff) before `pipeline.window`/`pipeline.prune`
+  are run unattended over many days; not fixed here, out of scope for A5 itself.
 - **`detect/spoofing.py`'s `check_impossible_speed` has no tie-break on its `lag() OVER (PARTITION
   BY mmsi ORDER BY timestamp)` window, so its event count is non-deterministic across reruns when
   an mmsi has duplicate `(mmsi, timestamp)` rows** -- confirmed real during P3-4/A2's equivalence
@@ -364,5 +382,9 @@ eventually by discarding cleaned days too once Phase 2's detectors exist to defi
 reduce them to. **That deferral is now lifted: the detectors all exist, and P3-4 is the task that
 implements the discard.** Measured reduction ratios that make it work: 30 days of clean data are
 14.2 GB, while `liveness.parquet` (all that `detect.gaps` needs) is 64 MB, all five detector outputs
-are 114 MB, and `anchorages.parquet` is 0.10 MB. `pipeline/manifest.py` already has the unused
+are 114 MB, and `anchorages.parquet` is 0.10 MB. Post-P3-4/A5, `pipeline/prune.py` exists and is
+dry-run-safe against the real `data/` (confirmed this session), but has not yet been run with
+`--yes-delete` against it -- every legacy single-file artifact listed above is therefore still
+present alongside its window-partitioned counterpart, and the 30-day window's clean data is all
+still on disk. `pipeline/manifest.py` already has the unused
 `clean_discarded_at` / "reduced" state stubbed and tested for exactly this.
