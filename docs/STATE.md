@@ -195,27 +195,17 @@ is now ~3x faster than the legacy path, not just equivalent. 365 tests, `ruff` c
 **A2 done 2026-09-22**: every detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`,
 `behaviour`) plus `process/tracks.py`/`process/identity.py` now write
 `data/<kind>/window=<start>_<end>/part-0.parquet` atomically instead of one whole-range file a
-later window silently overwrote. `detect/gaps.py` deliberately NOT converted -- the plan's own A2
-section lists it as a consumer, not a producer. New `process/ship_type.py` fixes the plan's named
-hard blocker: `features/panel.py`'s `_build_ship_type` and `detect/identity_anomalies.py`'s
-`_build_ship_types` both used to scan clean partitions directly for this one static fact; both now
-read a shared raw `(mmsi, ship_type, type_of_mobile, n_messages)` reference instead, each
-re-applying its own prior resolution logic on top (provably equivalent, verified against real
-data). New shared helpers in `process/partitions.py`
-(`window_partition_path`/`atomic_write_parquet`/`partition_exists`/`git_sha`). Consumer defaults
-(`mmsi_imo_path`/`voyages_path`/`liveness_path`/`spoofing_path`/`sts_path`/
-`identity_anomalies_path`/`behaviour_path`/`anchorages_path`) point at `window=*` globs; the one
-exception is `ship_type_reference_path`, resolved to the caller's own exact window rather than a
-glob, so this one feature doesn't silently widen the already-documented "whole window, no month
-bound" limitation (see the open question below) beyond what P3-3 already flagged.
-**Real-window equivalence check (delegated to a background agent) PASSED for all 9 real builds**
-against the existing 2024-06-01..2024-06-30 legacy artifacts: exact row-count match on 8/9 (the
-9th, `spoofing`, 10,098,758 vs the legacy run's 10,098,760, traced to a pre-existing
-non-deterministic tie-break in `check_impossible_speed`'s unmodified SQL -- not a regression, see
-open questions); every substantive column (excluding provenance) matched exactly except a handful
-of floating-point last-bit differences (`voyages`: 254/95,692 rows; `anchorages`: 273/900 rows)
-and one `sts` row's `mode()`-tie-break `nav_status_b` (doesn't change that row's confidence). 381
-tests, `ruff` clean, both re-confirmed after the real run. Full detail:
+later window silently overwrote (`detect/gaps.py` deliberately excluded -- plan's own consumer,
+not producer, list). New `process/ship_type.py` fixes the plan's named hard blocker (`panel.py`/
+`identity_anomalies.py` used to scan clean partitions directly for ship_type; both now read a
+shared reference). New shared helpers in `process/partitions.py`. Consumer defaults point at
+`window=*` globs, except `ship_type_reference_path` (resolved to the caller's exact window, to
+avoid widening the already-documented "whole window, no month bound" limitation -- see open
+questions). **Real-window equivalence check (background agent) PASSED for all 9 real builds**
+against the existing 2024-06-01..2024-06-30 legacy artifacts -- exact row-count match on 8/9 (the
+`spoofing` diff traced to a pre-existing non-deterministic tie-break, not a regression -- see open
+questions); every substantive column matched exactly except a few float-last-bit/`mode()`-tie-break
+differences of the same class. 381 tests, `ruff` clean. Full detail:
 `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A2" entry.
 
 ## Next up
