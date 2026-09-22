@@ -180,63 +180,29 @@ _Last updated: 2026-09-22_
 
 ## In progress
 
-**P3-4, Part A: per-window storage pipeline -- A1 and A2 done, A3-A5 not started.** Full spec:
-`docs/PLAN_P4-0_P3-4.md`. **A1 done 2026-09-22**: `detect/liveness.py`'s `build_liveness` now
-writes one day-partition at a time (`data/coverage/liveness/date=.../part-0.parquet`, atomic,
-skips days already built) instead of one whole-range file the next window would overwrite;
-`liveness_verdict` accepts that directory (new default) or a legacy whole-range file (still
-supported). Includes A1.1's denominator fix (exact day-count, not span, under disjoint coverage --
-the old arithmetic silently biased verdicts toward `no_evidence`). Verified on real data: migrated
-2024-06-01..2024-06-30 (3,988,982 rows, matches the legacy file exactly), and `detect.gaps`
-rebuilt against it reproduces the existing real `gaps.parquet` row for row (74,546 gaps, zero
-diffs). A real perf bug (naive per-day stat loop) found and fixed along the way -- directory mode
-is now ~3x faster than the legacy path, not just equivalent. 365 tests, `ruff` clean.
+**P3-4, Part A: per-window storage pipeline. A1-A4 done 2026-09-22, A5 not started.** Full spec:
+`docs/PLAN_P4-0_P3-4.md`. Full real numbers and every bug found/fixed for each sub-part are in
+`docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A4" entries; headline only, here:
 
-**A2 done 2026-09-22**: every detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`,
-`behaviour`) plus `process/tracks.py`/`process/identity.py` now write
-`data/<kind>/window=<start>_<end>/part-0.parquet` atomically instead of one whole-range file a
-later window silently overwrote (`detect/gaps.py` deliberately excluded -- plan's own consumer,
-not producer, list). New `process/ship_type.py` fixes the plan's named hard blocker (`panel.py`/
-`identity_anomalies.py` used to scan clean partitions directly for ship_type; both now read a
-shared reference). New shared helpers in `process/partitions.py`. Consumer defaults point at
-`window=*` globs, except `ship_type_reference_path` (resolved to the caller's exact window, to
-avoid widening the already-documented "whole window, no month bound" limitation -- see open
-questions). **Real-window equivalence check (background agent) PASSED for all 9 real builds**
-against the existing 2024-06-01..2024-06-30 legacy artifacts -- exact row-count match on 8/9 (the
-`spoofing` diff traced to a pre-existing non-deterministic tie-break, not a regression -- see open
-questions); every substantive column matched exactly except a few float-last-bit/`mode()`-tie-break
-differences of the same class. 381 tests, `ruff` clean. Full detail:
-`docs/DECISIONS.md`'s 2026-09-22 "P3-4/A2" entry.
-
-**A3 done 2026-09-22**: `process/thin.py` -- day-partitioned downsampled tracks
-(`data/tracks/thin/date=.../part-0.parquet`, one row per (mmsi, 5-minute bucket)) for the Phase 5
-map and manual review only, never for re-detection. Day-partitioned like A1's `detect.liveness`,
-not window-partitioned like A2's detectors, since a thinned day never changes once a later window
-is built. A real-schema mismatch found before the first real run (clean partitions carry
-`navigational_status`, not the plan's `nav_status` shorthand -- fixed by aliasing on read). Real
-run over the full 2024-06-01..2024-06-30 window: 452 MB, 26,333,818 rows, 21,146 distinct mmsi
-across 30 day-partitions (matches `features.panel`'s own whole-window mmsi roster exactly); one
-real day measured first (18 MB/day) confirmed the default 5-minute interval stays within the
-plan's 10-25 MB/day budget, so it was not widened. 9 new tests, 390 total, `ruff` clean. Full
-detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A3" entry.
-
-**A4 done 2026-09-22**: `pipeline/window.py` -- the per-window orchestrator, creates only, never
-deletes. `process_window` runs backfill + `detect.liveness` over `[start - lead_in_days, end]`
-(lead-in default 30, matching liveness's own baseline), then over `[start, end]` only:
-`process.thin`, `process.ship_type`, `process.tracks`, `process.identity`, and the five detectors
-in real dependency order (`anchorages` -> `spoofing`/`sts` -> `behaviour` -> `identity_anomalies`).
-`_verify_window()` reads every artifact back with DuckDB (never just checks a file exists) and
-returns a failure list; only if empty does it record an A0.3 fingerprint + `verified_at` per day
-in `[start, end]` via `pipeline.manifest` -- the field `pipeline.prune` (A5) will select on. Every
-downstream path is derived from `data_root`, not each module's hardcoded default, which is what
-makes the whole cycle testable against `tmp_path` by monkeypatching every downstream builder (9
-new tests, 399 total, `ruff` clean). A real bug found and fixed before trusting the fingerprint:
-raw min/max lat/lon produced a near-useless bbox (`[-55, 64, -157, 123]`, nearly the whole globe)
-swamped by `process.clean`'s already-documented corrupted-coordinate outliers -- fixed by reusing
-`detect.spoofing`'s own tail-quantile bbox crop. A real end-to-end run over 2024-06-10..2024-06-11
-(no new downloads -- inside the already-backfilled month) exercised every real builder including
-the spatial extension, verified and recorded both days, and a second run without `--force`
-confirmed full idempotency. Full detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A4" entry.
+- **A1**: `detect/liveness.py` writes liveness day-partitioned (`date=.../part-0.parquet`),
+  including the critical baseline-denominator fix (disjoint-coverage span was silently biasing
+  verdicts toward `no_evidence`). Verified byte-for-byte against the existing legacy artifacts.
+- **A2**: every detector + `process/tracks.py`/`process/identity.py` write window-partitioned
+  (`window=<start>_<end>/part-0.parquet`) instead of one whole-range file the next window
+  overwrote. New `process/ship_type.py` fixes the ship_type hard blocker. Real-window equivalence
+  check passed for all 9 real builds against the legacy artifacts (row-for-row, modulo two known
+  pre-existing non-deterministic tie-breaks, not regressions -- see open questions).
+- **A3**: `process/thin.py`, day-partitioned downsampled tracks (~5min buckets) for the Phase 5
+  map only, never re-detection. Real 30-day run: 452 MB, 21,146 distinct mmsi (matches the panel's
+  roster exactly).
+- **A4**: `pipeline/window.py`, the per-window orchestrator (creates only, never deletes) --
+  backfill+liveness over the lead-in range, then thin/ship_type/tracks/identity/detectors over the
+  window itself, `_verify_window()` reads every artifact back with DuckDB, records a fingerprint +
+  `verified_at` per day only if all pass. Validated end to end against real data, including a
+  `--force`-less re-run confirming full idempotency. Fixed a real bug: raw min/max bbox was
+  swamped by known corrupted-coordinate outliers -- now uses `detect.spoofing`'s own tail-quantile
+  crop.
+- 399 tests total, `ruff` clean throughout.
 
 ## Next up
 
