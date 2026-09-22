@@ -64,21 +64,32 @@ from __future__ import annotations
 import argparse
 import logging
 import math
-import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 import duckdb
 
-from detect.anchorages import ANCHORAGES_PATH, MIN_DISTINCT_VESSELS
-from process.partitions import existing_partitions
+from detect.anchorages import ANCHORAGES_GLOB, MIN_DISTINCT_VESSELS
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    git_sha,
+    partition_exists,
+    window_partition_path,
+)
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
-STS_PATH = DETECT_ROOT / "sts.parquet"
+# data/detect/sts/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) -- see
+# build_sts_events. Legacy single-file layout was data/detect/sts.parquet.
+STS_ROOT = DETECT_ROOT / "sts"
+# Default read-side path for consumers (detect.behaviour, detect.sts_agreement): every window's
+# episodes in one glob -- see detect.anchorages.ANCHORAGES_GLOB for why this works as a bound
+# read_parquet(?) parameter.
+STS_GLOB = STS_ROOT / "window=*" / "part-0.parquet"
 
 # Only Class A/B -- a vessel must never be paired with a fixed Base Station/AtoN beacon.
 MOBILE_TYPES = ("Class A", "Class B")
@@ -151,24 +162,6 @@ _SERVICE_SHIP_TYPES = frozenset(
 _MOORED_STATUSES = frozenset({"Moored", "At anchor"})
 _UNDEFINED_STATUSES = frozenset({"Undefined", "Unknown", "", "Not defined"})
 
-
-def _git_sha() -> str:
-    """Short git commit SHA of the working tree, or "unknown" if it can't be determined.
-
-    Provenance metadata only, never correctness-critical, so any failure (not a git repo, git
-    not on PATH, etc.) falls back to a literal string rather than raising.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
 
 
 def _ship_type_pair_score(type_a: str | None, type_b: str | None) -> float:
@@ -719,17 +712,22 @@ def build_sts_events(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    anchorages_path: Path = ANCHORAGES_PATH,
-    out_path: Path = STS_PATH,
+    anchorages_path: Path = ANCHORAGES_GLOB,
+    out_root: Path = STS_ROOT,
     force: bool = False,
 ) -> Path:
-    """Run the full ship-to-ship-transfer pipeline over [start, end] and write out_path.
+    """Run the full ship-to-ship-transfer pipeline over [start, end] and write to
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError naming what builds each missing input -- no clean
-    partitions in range: process.clean.clean_range; missing anchorages_path:
-    detect.anchorages.build_anchorages.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError naming what builds each missing input -- no clean partitions in range:
+    process.clean.clean_range; missing anchorages_path: detect.anchorages.build_anchorages.
+    ``anchorages_path`` defaults to a glob over every window built so far
+    (``detect.anchorages.ANCHORAGES_GLOB``).
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
@@ -742,7 +740,7 @@ def build_sts_events(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under "
             f"{in_root}; run process.clean.clean_range first"
         )
-    if not anchorages_path.exists():
+    if not partition_exists(anchorages_path):
         raise FileNotFoundError(
             f"No anchorage mask at {anchorages_path}; run "
             "detect.anchorages.build_anchorages first"
@@ -812,7 +810,7 @@ def build_sts_events(
         )
 
         built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
+        sha = git_sha()
         con.execute(
             "CREATE OR REPLACE TEMP TABLE _sts_events ("
             "encounter_id VARCHAR, mmsi_a BIGINT, mmsi_b BIGINT, episode_seq BIGINT, "
@@ -878,15 +876,15 @@ def build_sts_events(
                 ],
             )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
+        atomic_write_parquet(
+            con,
+            "SELECT *, "
             f"DATE '{start.isoformat()}' AS window_start, "
             f"DATE '{end.isoformat()}' AS window_end, "
             f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM _sts_events ORDER BY confidence DESC, start_time) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
+            f"'{sha}' AS git_sha "
+            "FROM _sts_events ORDER BY confidence DESC, start_time",
+            out_path,
         )
     finally:
         con.close()
@@ -904,10 +902,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--anchorages-path", default=str(ANCHORAGES_PATH), help="Path to the anchorage mask"
+        "--anchorages-path",
+        default=str(ANCHORAGES_GLOB),
+        help="Path or glob for the anchorage mask(s)",
     )
     parser.add_argument(
-        "--out-path", default=str(STS_PATH), help="Output path for the encounter events"
+        "--out-root",
+        default=str(STS_ROOT),
+        help="Root directory for window-partitioned encounter-events output",
     )
     parser.add_argument(
         "--force", action="store_true", help="Rebuild even if the output already exists"
@@ -925,7 +927,7 @@ def main(argv: list[str] | None = None) -> None:
         end,
         in_root=Path(args.in_dir),
         anchorages_path=Path(args.anchorages_path),
-        out_path=Path(args.out_path),
+        out_root=Path(args.out_root),
         force=args.force,
     )
 

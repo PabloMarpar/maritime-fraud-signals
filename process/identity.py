@@ -54,12 +54,27 @@ from pathlib import Path
 
 import duckdb
 
-from process.partitions import existing_partitions
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    window_partition_path,
+)
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
-IDENTITY_PATH = Path("data/identity/mmsi_imo.parquet")
+IDENTITY_ROOT = Path("data/identity/mmsi_imo")
+# data/identity/mmsi_imo/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) --
+# see resolve_range. Legacy single-file layout was data/identity/mmsi_imo.parquet.
+#
+# NOTE: is_reused/message_count/first_seen/last_seen are computed PER WINDOW (see _resolve's
+# `count(imo) OVER (PARTITION BY mmsi)`), same as before this change -- a caller reading a glob
+# across several windows will see one row per (mmsi, window) pair, not a single cross-window
+# reused verdict for an mmsi whose distinct valid IMOs were observed in two different windows.
+# Solving that is out of scope here (see docs/STATE.md's P3-3 note on static identity features
+# needing a month bound for a future multi-window panel); this change only fixes the overwrite
+# problem, not cross-window re-aggregation.
+IDENTITY_GLOB = IDENTITY_ROOT / "window=*" / "part-0.parquet"
 
 # A valid IMO ship number is exactly 7 digits, is not the all-zero
 # placeholder, and satisfies the check-digit formula: weight digits 1-6 by
@@ -148,18 +163,20 @@ def resolve_range(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    out_path: Path = IDENTITY_PATH,
+    out_root: Path = IDENTITY_ROOT,
     force: bool = False,
 ) -> Path:
-    """Build the MMSI<->IMO identity table for every clean partition in [start, end].
+    """Build the MMSI<->IMO identity table for every clean partition in [start, end], writing
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists, this is a no-op unless
-    force=True. Returns out_path either way. Raises FileNotFoundError if no
-    clean partition exists anywhere in the requested range (an empty result
-    would silently look like "nothing to see here" rather than "nothing was
-    read"); a partial range with some days missing only warns, see
-    process.partitions.existing_partitions.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError if no clean partition exists anywhere in the requested range (an empty
+    result would silently look like "nothing to see here" rather than "nothing was read"); a
+    partial range with some days missing only warns, see process.partitions.existing_partitions.
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
@@ -196,8 +213,7 @@ def resolve_range(
             n_reused,
         )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(f"COPY (SELECT * FROM final) TO '{out_path.as_posix()}' (FORMAT PARQUET)")
+        atomic_write_parquet(con, "SELECT * FROM final", out_path)
     finally:
         con.close()
     return out_path
@@ -216,7 +232,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--out-path", default=str(IDENTITY_PATH), help="Output path for the identity table"
+        "--out-root",
+        default=str(IDENTITY_ROOT),
+        help="Root directory for window-partitioned identity output",
     )
     return parser.parse_args(argv)
 
@@ -227,7 +245,7 @@ def main(argv: list[str] | None = None) -> None:
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end) if args.end else start
     resolve_range(
-        start, end, in_root=Path(args.in_dir), out_path=Path(args.out_path), force=args.force
+        start, end, in_root=Path(args.in_dir), out_root=Path(args.out_root), force=args.force
     )
 
 

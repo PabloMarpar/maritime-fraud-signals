@@ -62,13 +62,22 @@ from pathlib import Path
 
 import duckdb
 
-from process.partitions import existing_partitions
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    window_partition_path,
+)
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 TRACKS_ROOT = Path("data/tracks")
-VOYAGES_PATH = TRACKS_ROOT / "voyages.parquet"
+# data/tracks/voyages/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) -- see
+# reconstruct_range. Legacy single-file layout was data/tracks/voyages.parquet.
+VOYAGES_ROOT = TRACKS_ROOT / "voyages"
+# Default read-side path for consumers: every window's voyages in one glob -- see
+# detect.anchorages.ANCHORAGES_GLOB for why a glob works as a bound read_parquet(?) parameter.
+VOYAGES_GLOB = VOYAGES_ROOT / "window=*" / "part-0.parquet"
 
 # Default voyage-boundary gap: see module docstring for the reasoning.
 # Callers (library or CLI) may override this per run.
@@ -142,20 +151,22 @@ def reconstruct_range(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    out_root: Path = TRACKS_ROOT,
+    out_root: Path = VOYAGES_ROOT,
     gap_hours: float = DEFAULT_GAP_HOURS,
     force: bool = False,
 ) -> Path:
-    """Reconstruct tracks and segment voyages for every clean partition in [start, end].
+    """Reconstruct tracks and segment voyages for every clean partition in [start, end], writing
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if the output file already exists, this is a no-op unless
-    force=True. Returns voyages_path either way. Raises FileNotFoundError if
-    no clean partition exists anywhere in the requested range; a partial
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError if no clean partition exists anywhere in the requested range; a partial
     range with some days missing only warns, see
     process.partitions.existing_partitions. Because of the cross-date design
     (see module docstring), there is deliberately no ``reconstruct_day``.
     """
-    voyages_path = out_root / "voyages.parquet"
+    voyages_path = window_partition_path(start, end, out_root)
     if voyages_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)",
@@ -187,10 +198,10 @@ def reconstruct_range(
             avg_points,
         )
 
-        out_root.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT * FROM voyages ORDER BY mmsi, voyage_seq) "
-            f"TO '{voyages_path.as_posix()}' (FORMAT PARQUET)"
+        atomic_write_parquet(
+            con,
+            "SELECT * FROM voyages ORDER BY mmsi, voyage_seq",
+            voyages_path,
         )
     finally:
         con.close()
@@ -241,7 +252,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--out-dir", default=str(TRACKS_ROOT), help="Root for the voyages output table"
+        "--out-dir",
+        default=str(VOYAGES_ROOT),
+        help="Root for window-partitioned voyages output",
     )
     return parser.parse_args(argv)
 

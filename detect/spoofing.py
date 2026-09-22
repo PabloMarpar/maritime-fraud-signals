@@ -112,7 +112,6 @@ from __future__ import annotations
 import argparse
 import logging
 import math
-import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -121,14 +120,22 @@ import duckdb
 import numpy as np
 
 from ingest.landmask import LAND_PATH
-from process.partitions import existing_partitions
-from process.tracks import VOYAGES_PATH
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    git_sha,
+    partition_exists,
+    window_partition_path,
+)
+from process.tracks import VOYAGES_GLOB
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
-SPOOFING_PATH = DETECT_ROOT / "spoofing.parquet"
+# data/detect/spoofing/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) -- see
+# build_spoofing_events. Legacy single-file layout was data/detect/spoofing.parquet.
+SPOOFING_ROOT = DETECT_ROOT / "spoofing"
 
 # Check 1: impossible speed. Unvalidated global ceiling -- see module docstring.
 MAX_PLAUSIBLE_SPEED_KNOTS = 50.0
@@ -182,25 +189,6 @@ class SpoofingEvent:
     confidence: float  # 0-1, a rule-based heuristic, NOT a calibrated probability -- unvalidated.
     evidence_value: float  # the check's key metric -- see per-check docstring notes.
     detail: str  # short human-readable note.
-
-
-def _git_sha() -> str:
-    """Short git commit SHA of the working tree, or "unknown" if it can't be determined.
-
-    Provenance metadata only, never correctness-critical, so any failure (not a git repo, git
-    not on PATH, etc.) falls back to a literal string rather than raising.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
 
 
 def _build_all_days(con: duckdb.DuckDBPyConnection, partitions: list[tuple[date, Path]]) -> None:
@@ -594,23 +582,29 @@ def build_spoofing_events(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    voyages_path: Path = VOYAGES_PATH,
+    voyages_path: Path = VOYAGES_GLOB,
     land_path: Path = LAND_PATH,
-    out_path: Path = SPOOFING_PATH,
+    out_root: Path = SPOOFING_ROOT,
     force: bool = False,
 ) -> Path:
-    """Run all four spoofing checks over [start, end] (inclusive on both ends) and write out_path.
+    """Run all four spoofing checks over [start, end] (inclusive on both ends) and write to
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError naming what builds each missing input -- no clean
-    partitions in range: process.clean.clean_range; missing voyages_path:
-    process.tracks.reconstruct_range; missing land_path: ingest.landmask.build_land_mask -- all
-    three are required unconditionally, matching detect.gaps's own pattern of requiring every
-    declared input even though only some checks use each one.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError naming what builds each missing input -- no clean partitions in range:
+    process.clean.clean_range; missing voyages_path: process.tracks.reconstruct_range; missing
+    land_path: ingest.landmask.build_land_mask -- all three are required unconditionally, matching
+    detect.gaps's own pattern of requiring every declared input even though only some checks use
+    each one. ``voyages_path`` defaults to a glob over every window process.tracks has built
+    (``process.tracks.VOYAGES_GLOB``), so this naturally sees the whole accumulated voyage history,
+    not just one window's worth.
 
     Opens exactly one DuckDB connection and reuses it across all four checks, mirroring
     detect.gaps's pattern.
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
@@ -623,7 +617,7 @@ def build_spoofing_events(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under "
             f"{in_root}; run process.clean.clean_range first"
         )
-    if not voyages_path.exists():
+    if not partition_exists(voyages_path):
         raise FileNotFoundError(
             f"No voyages table at {voyages_path}; run process.tracks.reconstruct_range first"
         )
@@ -663,7 +657,7 @@ def build_spoofing_events(
         )
 
         built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
+        sha = git_sha()
         con.execute(
             "CREATE OR REPLACE TEMP TABLE _spoofing_events ("
             "mmsi BIGINT, kind VARCHAR, event_time TIMESTAMP, latitude DOUBLE, longitude DOUBLE, "
@@ -687,15 +681,15 @@ def build_spoofing_events(
                 ],
             )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
+        atomic_write_parquet(
+            con,
+            "SELECT *, "
             f"DATE '{start.isoformat()}' AS window_start, "
             f"DATE '{end.isoformat()}' AS window_end, "
             f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM _spoofing_events ORDER BY mmsi, event_time, kind) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
+            f"'{sha}' AS git_sha "
+            "FROM _spoofing_events ORDER BY mmsi, event_time, kind",
+            out_path,
         )
     finally:
         con.close()
@@ -713,13 +707,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--voyages-path", default=str(VOYAGES_PATH), help="Path to the voyages table"
+        "--voyages-path",
+        default=str(VOYAGES_GLOB),
+        help="Path or glob for the voyages table(s)",
     )
     parser.add_argument(
         "--land-path", default=str(LAND_PATH), help="Path to the land mask table"
     )
     parser.add_argument(
-        "--out-path", default=str(SPOOFING_PATH), help="Output path for the spoofing events"
+        "--out-root",
+        default=str(SPOOFING_ROOT),
+        help="Root directory for window-partitioned spoofing-events output",
     )
     parser.add_argument(
         "--force", action="store_true", help="Rebuild even if the output already exists"
@@ -738,7 +736,7 @@ def main(argv: list[str] | None = None) -> None:
         in_root=Path(args.in_dir),
         voyages_path=Path(args.voyages_path),
         land_path=Path(args.land_path),
-        out_path=Path(args.out_path),
+        out_root=Path(args.out_root),
         force=args.force,
     )
 

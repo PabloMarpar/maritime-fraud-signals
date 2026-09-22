@@ -546,18 +546,17 @@ def test_build_spoofing_events_end_to_end(tmp_path):
     land_path = tmp_path / "reference" / "land.parquet"
     _write_land(land_path, LAND_POLYGON)
 
-    out_path = tmp_path / "detect" / "spoofing.parquet"
+    out_root = tmp_path / "detect" / "spoofing"
     result_path = spoofing.build_spoofing_events(
         DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-        out_path=out_path,
+        out_root=out_root,
     )
 
-    assert result_path == out_path
     con = duckdb.connect()
     try:
         rows = con.execute(
             "SELECT mmsi, kind, built_at, git_sha, window_start, window_end "
-            f"FROM '{out_path.as_posix()}' ORDER BY mmsi"
+            f"FROM '{result_path.as_posix()}' ORDER BY mmsi"
         ).fetchall()
     finally:
         con.close()
@@ -583,17 +582,17 @@ def test_build_spoofing_events_is_idempotent_by_default(tmp_path, caplog):
     land_path = tmp_path / "reference" / "land.parquet"
     _write_empty_land(land_path)
 
-    out_path = tmp_path / "detect" / "spoofing.parquet"
+    out_root = tmp_path / "detect" / "spoofing"
     first = spoofing.build_spoofing_events(
         DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-        out_path=out_path,
+        out_root=out_root,
     )
     first_mtime = first.stat().st_mtime_ns
 
     with caplog.at_level("INFO"):
         second = spoofing.build_spoofing_events(
             DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-            out_path=out_path,
+            out_root=out_root,
         )
 
     assert second == first
@@ -607,12 +606,12 @@ def test_build_spoofing_events_raises_when_clean_partitions_missing(tmp_path):
     _write_empty_voyages(voyages_path)
     land_path = tmp_path / "reference" / "land.parquet"
     _write_empty_land(land_path)
-    out_path = tmp_path / "detect" / "spoofing.parquet"
+    out_root = tmp_path / "detect" / "spoofing"
 
     with pytest.raises(FileNotFoundError, match="clean"):
         spoofing.build_spoofing_events(
             DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-            out_path=out_path,
+            out_root=out_root,
         )
 
 
@@ -622,12 +621,12 @@ def test_build_spoofing_events_raises_when_voyages_missing(tmp_path):
     voyages_path = tmp_path / "tracks" / "voyages.parquet"  # never written
     land_path = tmp_path / "reference" / "land.parquet"
     _write_empty_land(land_path)
-    out_path = tmp_path / "detect" / "spoofing.parquet"
+    out_root = tmp_path / "detect" / "spoofing"
 
     with pytest.raises(FileNotFoundError, match="voyages"):
         spoofing.build_spoofing_events(
             DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-            out_path=out_path,
+            out_root=out_root,
         )
 
 
@@ -637,10 +636,10 @@ def test_build_spoofing_events_raises_when_land_missing(tmp_path):
     voyages_path = tmp_path / "tracks" / "voyages.parquet"
     _write_empty_voyages(voyages_path)
     land_path = tmp_path / "reference" / "land.parquet"  # never written
-    out_path = tmp_path / "detect" / "spoofing.parquet"
+    out_root = tmp_path / "detect" / "spoofing"
 
     with pytest.raises(FileNotFoundError, match="land"):
         spoofing.build_spoofing_events(
             DAY, DAY2, in_root=clean_root, voyages_path=voyages_path, land_path=land_path,
-            out_path=out_path,
+            out_root=out_root,
         )

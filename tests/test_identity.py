@@ -57,9 +57,9 @@ def test_one_to_one_mmsi_imo_pairing(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000001, VALID_IMO_A)] * 5
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -80,9 +80,9 @@ def test_orphaned_mmsi_never_has_valid_imo(tmp_path):
         (219000002, "Unknown"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -98,9 +98,9 @@ def test_not_orphaned_negative_case(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000003, VALID_IMO_A)]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -115,9 +115,9 @@ def test_reused_mmsi_same_day(tmp_path):
         (219000004, VALID_IMO_B),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 2
@@ -131,9 +131,9 @@ def test_reused_mmsi_across_days(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000005, VALID_IMO_A)])
     _write_clean_partition(in_root, DAY2, [(219000005, VALID_IMO_B)])
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY2, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY2, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 2
@@ -145,9 +145,9 @@ def test_not_reused_negative_case(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000006, VALID_IMO_A)])
     _write_clean_partition(in_root, DAY2, [(219000006, VALID_IMO_A)])
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY2, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY2, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -163,9 +163,9 @@ def test_invalid_checksum_not_counted_as_identity(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000007, "1234568")]  # 7 digits, checksum fails
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -181,9 +181,9 @@ def test_wrong_digit_count_not_counted_as_identity(tmp_path):
         (219000008, "12345678"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -196,9 +196,9 @@ def test_all_zero_imo_not_counted_as_identity(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000009, "0000000")]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -211,9 +211,9 @@ def test_well_known_junk_imo_not_counted_as_identity(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000010, "1193046")]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -226,9 +226,9 @@ def test_valid_imo_boundary_survives(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000011, VALID_IMO_D)]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -246,9 +246,9 @@ def test_mixed_valid_and_invalid_imo_only_valid_counted(tmp_path):
         (219000012, "0000000"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    out_path = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     result = _read_identity(out_path)
     assert len(result) == 1
@@ -263,10 +263,10 @@ def test_resolve_range_skips_missing_day_with_warning(tmp_path, caplog):
     _write_clean_partition(in_root, DAY, [(219000013, VALID_IMO_A)])
     # DAY2 deliberately missing.
     _write_clean_partition(in_root, DAY3, [(219000013, VALID_IMO_A)])
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
     with caplog.at_level("WARNING"):
-        identity.resolve_range(DAY, DAY3, in_root=in_root, out_path=out_path)
+        out_path = identity.resolve_range(DAY, DAY3, in_root=in_root, out_root=out_root)
 
     assert any("2024-06-06" in record.message for record in caplog.records)
     result = _read_identity(out_path)
@@ -276,22 +276,22 @@ def test_resolve_range_skips_missing_day_with_warning(tmp_path, caplog):
 
 def test_resolve_range_raises_when_no_partitions_exist(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
     with pytest.raises(FileNotFoundError):
-        identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+        identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
 
 def test_resolve_range_is_idempotent_by_default(tmp_path):
     """Re-running without force must not rebuild the output."""
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000014, VALID_IMO_A)])
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    first = identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    first = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
     first_mtime = first.stat().st_mtime_ns
 
-    second = identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
+    second = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
 
     assert second == first
     assert second.stat().st_mtime_ns == first_mtime, "re-running without --force must not rewrite the file"
@@ -300,9 +300,24 @@ def test_resolve_range_is_idempotent_by_default(tmp_path):
 def test_resolve_range_force_rebuilds(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000015, VALID_IMO_A)])
-    out_path = tmp_path / "identity" / "mmsi_imo.parquet"
+    out_root = tmp_path / "identity"
 
-    identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path)
-    result = identity.resolve_range(DAY, DAY, in_root=in_root, out_path=out_path, force=True)
+    identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    result = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root, force=True)
 
     assert result.exists()
+
+
+def test_resolve_range_different_windows_land_at_different_paths(tmp_path):
+    """P3-4/A2: a later window must accumulate next to an earlier one, never overwrite it."""
+    in_root = tmp_path / "clean" / "ais_dk"
+    _write_clean_partition(in_root, DAY, [(219000016, VALID_IMO_A)])
+    _write_clean_partition(in_root, DAY2, [(219000016, VALID_IMO_A)])
+    out_root = tmp_path / "identity"
+
+    first = identity.resolve_range(DAY, DAY, in_root=in_root, out_root=out_root)
+    second = identity.resolve_range(DAY, DAY2, in_root=in_root, out_root=out_root)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()

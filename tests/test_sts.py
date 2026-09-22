@@ -133,7 +133,7 @@ def test_offshore_rendezvous_is_flagged(tmp_path):
     flagged with high confidence (all four rendezvous sides 'moved')."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = [
@@ -150,7 +150,7 @@ def test_offshore_rendezvous_is_flagged(tmp_path):
     ]
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     events = _read_events(out_path)
     assert len(events) == 1
@@ -165,7 +165,7 @@ def test_moored_neighbours_are_not_flagged(tmp_path):
     OTHER vessels). Must not be flagged at all."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_anchorages(
         anchorages_path, [(LAT0, LON0, [100, 200, 301, 302, 303, 304, 305], True)]
     )
@@ -174,7 +174,7 @@ def test_moored_neighbours_are_not_flagged(tmp_path):
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=5.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert _read_events(out_path) == []
 
@@ -186,7 +186,7 @@ def test_moored_neighbours_outside_an_anchorage_are_flagged_with_low_confidence(
     rendezvous score to a neutral 0.5, not toward 0 -- see test_missing_context_is_no_data)."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = [
@@ -205,7 +205,7 @@ def test_moored_neighbours_outside_an_anchorage_are_flagged_with_low_confidence(
     ]
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     events = _read_events(out_path)
     assert len(events) == 1
@@ -218,7 +218,7 @@ def test_pair_meeting_daily_is_segmented_into_separate_episodes(tmp_path):
     for the 647-hour false-encounter artifact."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     for day in (DAY, DAY2, DAY3, DAY4):
@@ -226,8 +226,8 @@ def test_pair_meeting_daily_is_segmented_into_separate_episodes(tmp_path):
         rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0, day=day)
         _write_clean_partition(in_root, day, rows)
 
-    sts.build_sts_events(
-        DAY, DAY4, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path
+    out_path = sts.build_sts_events(
+        DAY, DAY4, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root
     )
 
     events = _read_events(out_path)
@@ -242,14 +242,14 @@ def test_continuous_colocation_is_one_episode(tmp_path):
     not several."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=5.0, step_minutes=30)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=5.0, step_minutes=30)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     events = _read_events(out_path)
     assert len(events) == 1
@@ -260,7 +260,7 @@ def test_episode_crossing_midnight_is_one_event(tmp_path):
     """22:30 -> 01:30 across two day partitions must be one row, not split at the boundary."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     day1_rows = _dwell_rows(100, LAT0, LON0, start_minute=22 * 60 + 30, duration_hours=1.5, day=DAY)
@@ -271,8 +271,8 @@ def test_episode_crossing_midnight_is_one_event(tmp_path):
     day2_rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=1.5, day=DAY2)
     _write_clean_partition(in_root, DAY2, day2_rows)
 
-    sts.build_sts_events(
-        DAY, DAY2, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path
+    out_path = sts.build_sts_events(
+        DAY, DAY2, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root
     )
 
     events = _read_events(out_path)
@@ -285,14 +285,14 @@ def test_anchorage_defined_only_by_the_candidate_pair_does_not_exclude_them(tmp_
     the distinct-vessel bar, so the encounter IS flagged. The self-exoneration regression."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_anchorages(anchorages_path, [(LAT0, LON0, [100, 200], True)])
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert len(_read_events(out_path)) == 1
 
@@ -302,7 +302,7 @@ def test_non_coastal_cluster_does_not_exclude_an_encounter(tmp_path):
     distinct vessels it lists."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_anchorages(
         anchorages_path, [(LAT0, LON0, [100, 200, 301, 302, 303, 304, 305], False)]
     )
@@ -311,7 +311,7 @@ def test_non_coastal_cluster_does_not_exclude_an_encounter(tmp_path):
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert len(_read_events(out_path)) == 1
 
@@ -324,14 +324,14 @@ def test_non_coastal_cluster_does_not_exclude_an_encounter(tmp_path):
 def test_encounter_below_min_duration_is_not_flagged(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=1.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=1.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert _read_events(out_path) == []
 
@@ -340,14 +340,14 @@ def test_pair_above_max_median_speed_is_not_flagged(tmp_path):
     """Both vessels at 2.5kn -- passes the 3kn candidate pre-filter but fails the 2kn gate."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0, sog=2.5)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0, sog=2.5)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert _read_events(out_path) == []
 
@@ -355,14 +355,14 @@ def test_pair_above_max_median_speed_is_not_flagged(tmp_path):
 def test_pair_beyond_max_separation_is_not_flagged(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0 + 0.02, LON0, start_minute=0, duration_hours=3.0)  # ~2.2km
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert _read_events(out_path) == []
 
@@ -372,7 +372,7 @@ def test_pair_straddling_a_grid_cell_boundary_is_flagged(tmp_path):
     expansion, not just a same-cell join."""
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     boundary_lat = 57.00  # an exact multiple of GRID_DEG (0.01)
@@ -380,7 +380,7 @@ def test_pair_straddling_a_grid_cell_boundary_is_flagged(tmp_path):
     rows += _dwell_rows(200, boundary_lat + 0.0013, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert len(_read_events(out_path)) == 1
 
@@ -388,14 +388,14 @@ def test_pair_straddling_a_grid_cell_boundary_is_flagged(tmp_path):
 def test_base_station_is_never_paired_with_a_vessel(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0, mobile_type="Base Station")
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     assert _read_events(out_path) == []
 
@@ -403,14 +403,14 @@ def test_base_station_is_never_paired_with_a_vessel(tmp_path):
 def test_each_pair_appears_once_not_twice(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
-    sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+    out_path = sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
     events = _read_events(out_path)
     assert len(events) == 1
@@ -487,21 +487,21 @@ def test_codrifting_pair_scores_higher_confidence_than_static_pair():
 def test_build_sts_events_is_idempotent_by_default(tmp_path, caplog):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
     first = sts.build_sts_events(
-        DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path
+        DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root
     )
     first_mtime = first.stat().st_mtime_ns
 
     caplog.clear()
     with caplog.at_level("INFO"):
         second = sts.build_sts_events(
-            DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path
+            DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root
         )
 
     assert second.stat().st_mtime_ns == first_mtime, "re-running without --force must not rewrite"
@@ -511,20 +511,20 @@ def test_build_sts_events_is_idempotent_by_default(tmp_path, caplog):
 def test_build_sts_events_raises_when_clean_partitions_missing(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     _write_empty_anchorages(anchorages_path)
 
     with pytest.raises(FileNotFoundError, match="process.clean"):
-        sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+        sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
 
 
 def test_build_sts_events_raises_when_anchorages_missing(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     anchorages_path = tmp_path / "anchorages.parquet"
-    out_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "sts"
     rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
     rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
     _write_clean_partition(in_root, DAY, rows)
 
     with pytest.raises(FileNotFoundError, match="detect.anchorages"):
-        sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_path=out_path)
+        sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
