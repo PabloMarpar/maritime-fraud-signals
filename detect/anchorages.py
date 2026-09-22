@@ -67,7 +67,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -76,13 +75,24 @@ import duckdb
 
 from detect.liveness import MOBILE_TYPES
 from ingest.landmask import LAND_PATH
-from process.partitions import existing_partitions
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    git_sha,
+    window_partition_path,
+)
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 COVERAGE_ROOT = Path("data/coverage")
-ANCHORAGES_PATH = COVERAGE_ROOT / "anchorages.parquet"
+# data/coverage/anchorages/window=<start>_<end>/part-0.parquet, one file per window (P3-4/A2) --
+# see build_anchorages. Legacy single-file layout was data/coverage/anchorages.parquet.
+ANCHORAGES_ROOT = COVERAGE_ROOT / "anchorages"
+# Default read-side path for consumers (detect.sts, detect.behaviour): every window's mask in one
+# glob. DuckDB accepts this as a bound read_parquet(?) parameter, not just a literal string --
+# verified in tests/test_partitions.py -- so callers can pass it straight through unchanged.
+ANCHORAGES_GLOB = ANCHORAGES_ROOT / "window=*" / "part-0.parquet"
 
 # ~1.11km lat, ~0.63km lon at 55.5N. Unvalidated default -- see module docstring.
 ANCHORAGE_CELL_DEG = 0.01
@@ -118,25 +128,6 @@ MAX_ABS_LATITUDE_DEG = 62.0
 # (Class A typically reports every ~3 minutes when moored/anchored), tight enough that a vessel
 # passing through twice in a day with hours between cannot be stitched into one false stay.
 MAX_DWELL_GAP_MINUTES = 30.0
-
-
-def _git_sha() -> str:
-    """Short git commit SHA of the working tree, or "unknown" if it can't be determined.
-
-    Provenance metadata only, never correctness-critical, so any failure (not a git repo, git
-    not on PATH, etc.) falls back to a literal string rather than raising.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
 
 
 def _build(
@@ -267,7 +258,7 @@ def build_anchorages(
     end: date,
     in_root: Path = CLEAN_ROOT,
     land_path: Path = LAND_PATH,
-    out_path: Path = ANCHORAGES_PATH,
+    out_root: Path = ANCHORAGES_ROOT,
     cell_deg: float = ANCHORAGE_CELL_DEG,
     stationary_max_sog_knots: float = STATIONARY_MAX_SOG_KNOTS,
     min_stationary_hours: float = MIN_STATIONARY_HOURS,
@@ -277,33 +268,20 @@ def build_anchorages(
     max_dwell_gap_minutes: float = MAX_DWELL_GAP_MINUTES,
     force: bool = False,
 ) -> Path:
-    """Build the empirical anchorage mask over every clean partition in [start, end] and write out_path.
+    """Build the empirical anchorage mask over every clean partition in [start, end] and write it
+    to ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists AND was built for this same [start, end], this is a
-    no-op unless force=True. Returns out_path either way. A DIFFERENT stored window raises
-    ValueError instead of silently reusing a mask built for some other range (e.g. a smaller
-    prototype window) -- a stale mask filtering a larger real run would look like a legitimate
-    result while actually screening only a fraction of it. Raises FileNotFoundError naming what
-    builds each missing input -- no clean partitions in range: process.clean.clean_range; missing
-    land_path: ingest.landmask.build_land_mask.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError naming what builds each missing input -- no clean partitions in range:
+    process.clean.clean_range; missing land_path: ingest.landmask.build_land_mask.
 
     Non-coastal candidate cells are written with is_coastal=false, not dropped -- see module
     docstring for why. detect.sts is expected to filter on is_coastal itself.
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
-        check_con = duckdb.connect()
-        try:
-            existing_window = check_con.execute(
-                "SELECT DISTINCT window_start, window_end FROM read_parquet(?)", [str(out_path)]
-            ).fetchall()
-        finally:
-            check_con.close()
-        if existing_window and existing_window[0] != (start, end):
-            raise ValueError(
-                f"{out_path} was already built for {existing_window[0]}, not "
-                f"({start.isoformat()}, {end.isoformat()}); pass force=True to rebuild for this "
-                "window"
-            )
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
         )
@@ -348,16 +326,16 @@ def build_anchorages(
         )
 
         built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
+        sha = git_sha()
+        atomic_write_parquet(
+            con,
+            "SELECT *, "
             f"DATE '{start.isoformat()}' AS window_start, "
             f"DATE '{end.isoformat()}' AS window_end, "
             f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM anchorages ORDER BY cell_lat, cell_lon) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
+            f"'{sha}' AS git_sha "
+            "FROM anchorages ORDER BY cell_lat, cell_lon",
+            out_path,
         )
     finally:
         con.close()
@@ -437,7 +415,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--land-path", default=str(LAND_PATH), help="Path to the land mask table")
     parser.add_argument(
-        "--out-path", default=str(ANCHORAGES_PATH), help="Output path for the anchorage mask"
+        "--out-root",
+        default=str(ANCHORAGES_ROOT),
+        help="Root directory for window-partitioned anchorage-mask output",
     )
     parser.add_argument(
         "--cell-deg",
@@ -473,7 +453,7 @@ def main(argv: list[str] | None = None) -> None:
         end,
         in_root=Path(args.in_dir),
         land_path=Path(args.land_path),
-        out_path=Path(args.out_path),
+        out_root=Path(args.out_root),
         cell_deg=args.cell_deg,
         min_distinct_vessels=args.min_distinct_vessels,
         min_stationary_hours=args.min_stationary_hours,

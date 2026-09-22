@@ -119,13 +119,13 @@ def _read_anchorages(out_path: Path) -> list[tuple]:
 def test_cell_with_many_distinct_stationary_vessels_is_an_anchorage(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON)
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -136,7 +136,7 @@ def test_single_recurring_vessel_does_not_create_an_anchorage(tmp_path):
     """The direct P2-1b lesson in this module's terms: distinct vessels, never vessel-hours."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     # One mmsi, genuinely moored (dense pings) 5h/day for 10 days -- 50 vessel-hours of real
     # dwell, but only 1 distinct vessel.
@@ -145,8 +145,8 @@ def test_single_recurring_vessel_does_not_create_an_anchorage(tmp_path):
         rows = _stationary_rows([999], COASTAL_LAT, COASTAL_LON, day=day, duration_hours=5.0)
         _write_clean_partition(in_root, day, rows)
 
-    anchorages.build_anchorages(
-        DAY, DAY + timedelta(days=9), in_root=in_root, land_path=land_path, out_path=out_path
+    out_path = anchorages.build_anchorages(
+        DAY, DAY + timedelta(days=9), in_root=in_root, land_path=land_path, out_root=out_root
     )
 
     assert _read_anchorages(out_path) == []
@@ -155,13 +155,13 @@ def test_single_recurring_vessel_does_not_create_an_anchorage(tmp_path):
 def test_offshore_cluster_is_recorded_but_not_coastal(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], OFFSHORE_LAT, OFFSHORE_LON)
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -172,13 +172,13 @@ def test_offshore_cluster_is_recorded_but_not_coastal(tmp_path):
 def test_coastal_cluster_is_marked_coastal(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON)
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -191,13 +191,13 @@ def test_east_west_coastal_cluster_is_marked_coastal(tmp_path):
     of ~6.7km must not be inflated past the 10km threshold."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], EW_COASTAL_LAT, EW_COASTAL_LON)
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -208,7 +208,7 @@ def test_east_west_coastal_cluster_is_marked_coastal(tmp_path):
 def test_moving_vessels_do_not_create_an_anchorage(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root,
@@ -216,7 +216,7 @@ def test_moving_vessels_do_not_create_an_anchorage(tmp_path):
         _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON, sog=5.0),
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     assert _read_anchorages(out_path) == []
 
@@ -226,14 +226,14 @@ def test_brief_stops_do_not_create_an_anchorage(tmp_path):
     (3.0) -- isolates that threshold from the gap-splitting logic tested elsewhere."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     rows = _stationary_rows(
         [1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON, duration_hours=1.0, step_minutes=10
     )
     _write_clean_partition(in_root, DAY, rows)
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     assert _read_anchorages(out_path) == []
 
@@ -244,7 +244,7 @@ def test_pings_far_apart_within_one_day_do_not_create_a_false_stay(tmp_path):
     dwell was naively measured as the day's first-to-last ping span."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     rows = []
     for mmsi in (1, 2, 3, 4, 5):
@@ -252,7 +252,7 @@ def test_pings_far_apart_within_one_day_do_not_create_a_false_stay(tmp_path):
         rows.append((mmsi, _ts(22), COASTAL_LAT, COASTAL_LON, 0.1, "Class A"))
     _write_clean_partition(in_root, DAY, rows)
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     assert _read_anchorages(out_path) == []
 
@@ -262,7 +262,7 @@ def test_dwell_is_measured_per_day_not_summed_across_the_window(tmp_path):
     MIN_STATIONARY_HOURS applies within a single day, not across the whole window."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     for i in range(5):
         day = DAY + timedelta(days=i)
@@ -271,12 +271,12 @@ def test_dwell_is_measured_per_day_not_summed_across_the_window(tmp_path):
         )
         _write_clean_partition(in_root, day, rows)
 
-    anchorages.build_anchorages(
+    out_path = anchorages.build_anchorages(
         DAY,
         DAY + timedelta(days=4),
         in_root=in_root,
         land_path=land_path,
-        out_path=out_path,
+        out_root=out_root,
         min_distinct_vessels=1,
     )
 
@@ -286,7 +286,7 @@ def test_dwell_is_measured_per_day_not_summed_across_the_window(tmp_path):
 def test_member_mmsis_lists_each_distinct_vessel_exactly_once(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([5, 3, 1, 4, 2], COASTAL_LAT, COASTAL_LON)
@@ -295,7 +295,7 @@ def test_member_mmsis_lists_each_distinct_vessel_exactly_once(tmp_path):
         in_root, DAY2, _stationary_rows([1, 2], COASTAL_LAT, COASTAL_LON, day=DAY2)
     )
 
-    anchorages.build_anchorages(DAY, DAY2, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY2, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -313,13 +313,13 @@ def test_grid_cell_boundary_value_floors_without_float_error(tmp_path):
     epsilon-before-floor convention borrowed from detect.liveness."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     boundary_lat, boundary_lon = 55.02, 12.02  # exact multiples of ANCHORAGE_CELL_DEG (0.01)
     rows = _stationary_rows([1, 2, 3, 4, 5], boundary_lat, boundary_lon)
     _write_clean_partition(in_root, DAY, rows)
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    out_path = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
     rows = _read_anchorages(out_path)
     assert len(rows) == 1
@@ -327,12 +327,13 @@ def test_grid_cell_boundary_value_floors_without_float_error(tmp_path):
     assert rows[0][1] == pytest.approx(boundary_lon)
 
 
-def test_build_anchorages_raises_on_window_mismatch_without_force(tmp_path):
-    """A mask already built for a DIFFERENT [start, end] must not be silently reused -- e.g. a
-    smaller prototype window silently surviving into a larger real run."""
+def test_build_anchorages_different_windows_land_at_different_paths(tmp_path):
+    """P3-4/A2: a later window must accumulate next to an earlier one, never overwrite it -- the
+    exact overwrite problem this change fixes. Encoding the window into the path (rather than the
+    old single-file-plus-ValueError-on-mismatch guard) means this is true by construction."""
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON)
@@ -341,34 +342,35 @@ def test_build_anchorages_raises_on_window_mismatch_without_force(tmp_path):
         in_root, DAY2, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON, day=DAY2)
     )
 
-    anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+    first = anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
+    second = anchorages.build_anchorages(DAY, DAY2, in_root=in_root, land_path=land_path, out_root=out_root)
 
-    with pytest.raises(ValueError, match="force=True"):
-        anchorages.build_anchorages(
-            DAY, DAY2, in_root=in_root, land_path=land_path, out_path=out_path
-        )
+    assert first != second
+    assert first.exists()
+    assert second.exists()
 
 
 def test_build_anchorages_is_idempotent_by_default(tmp_path, caplog):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON)
     )
 
     first = anchorages.build_anchorages(
-        DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path
+        DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root
     )
     first_mtime = first.stat().st_mtime_ns
 
     caplog.clear()
     with caplog.at_level("INFO"):
         second = anchorages.build_anchorages(
-            DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path
+            DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root
         )
 
+    assert second == first
     assert second.stat().st_mtime_ns == first_mtime, "re-running without --force must not rewrite"
     assert any("already exists" in record.message for record in caplog.records)
 
@@ -376,20 +378,20 @@ def test_build_anchorages_is_idempotent_by_default(tmp_path, caplog):
 def test_build_anchorages_raises_when_clean_partitions_missing(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_land(land_path, LAND_POLYGON)
 
     with pytest.raises(FileNotFoundError, match="process.clean"):
-        anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+        anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
 
 
 def test_build_anchorages_raises_when_land_missing(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     land_path = tmp_path / "land.parquet"
-    out_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "anchorages"
     _write_clean_partition(
         in_root, DAY, _stationary_rows([1, 2, 3, 4, 5], COASTAL_LAT, COASTAL_LON)
     )
 
     with pytest.raises(FileNotFoundError, match="ingest.landmask"):
-        anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_path=out_path)
+        anchorages.build_anchorages(DAY, DAY, in_root=in_root, land_path=land_path, out_root=out_root)
