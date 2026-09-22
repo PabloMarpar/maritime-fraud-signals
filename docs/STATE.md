@@ -156,30 +156,43 @@ _Last updated: 2026-09-22_
   build) -- only column names and documentation changed. **P3-1 and P3-2 are unaffected, already
   committed, and were never in question.**
 
+- **P4-0 done: the discriminative check ran. Verdict GO, narrowly, on one detector family only.**
+  `features/panel.py` gained `n_observed_hours`/`n_observed_days` (from `detect.liveness`,
+  survives discarding clean data) and 21 `rate_*` columns (`RATE_BASE_COLUMNS` x
+  per-voyage/per-observed-day/per-1000-messages), added alongside every existing raw count --
+  `nullif`-guarded so zero exposure gives NULL ("undefined"), never a divide-by-zero infinity. New
+  `model/discriminative_check.py`: 147 positives (sanctioned after window_end) vs 4,717 negatives
+  (never sanctioned) within `imo IS NOT NULL`, excluding the 17 already-sanctioned-as-of-window_end
+  rows from both classes; AUC + 95% stratified-bootstrap CI + Mann-Whitney p per feature, in both
+  an unmatched and a `(ship_type, n_observed_days quintile)`-matched scope (10 groups contain both
+  classes, 3,011/4,864 rows -- effectively Tanker-and-thinly-Cargo, matching the ad-hoc check's own
+  population). **Real result: only `n_draught_change_unexplained` (raw and all 3 rate variants)
+  discriminates in the expected direction, in both scopes** (AUC 0.60-0.65, CI excluding 0.5).
+  Matching/normalization did NOT rescue `gaps`/`spoofing` (`discriminates_opposite`, AUC 0.26-0.33),
+  `sts` (`discriminates_opposite`, tiny effect, AUC ~0.47-0.49) or
+  `identity_anomalies`/`destination_course_mismatch` (`no_discrimination`) -- no feature's verdict
+  category changed between raw and normalized. Full detail, including two real bugs found and
+  fixed before trusting this (a DuckDB same-name-alias resolution bug in the rate SQL, and an
+  ignored `n_bootstrap` argument), in `docs/DECISIONS.md`'s 2026-09-22 "P4-0 executed" entry.
+  **P3-4 may proceed per the plan's literal rule, but Phase 4 must not report this as "the
+  detectors work" -- four of five families show no rescuable signal here; the README's limitations
+  section must say so plainly.** 360 tests pass (13 new), `ruff` clean.
+
 ## In progress
 
 Nothing in progress.
 
 ## Next up
 
-**Full plan for both items below, already approved: `docs/PLAN_P4-0_P3-4.md`** (committed to the
-repo, so a fresh session can read it without depending on a local path). Read it before starting
-either -- it carries the exact file paths, function signatures and safety gates.
+**P3-4: per-window storage pipeline.** Full spec already approved: `docs/PLAN_P4-0_P3-4.md`, Part A
+(committed to the repo, so a fresh session can read it without depending on a local path). So that
+windows sampled across 2022-2024 can be processed with a disk peak of ~1 window instead of the sum
+of all: partition `liveness` by day, make every detector write per-window artifacts, add thinned
+tracks for the map, and split creation (`pipeline/window.py`, never deletes) from deletion
+(`pipeline/prune.py`, opt-in, quarantine-first). The re-download drill (A0.4 in the plan) is the
+gate that must pass before any deletion is trusted.
 
-1. **P4-0 (DO THIS FIRST): discriminative check with exposure-normalized features.** A go/no-go gate
-   before any modelling. An ad-hoc version of this check was already run this session and came back
-   NEGATIVE -- see the first open question below. P4-0 formalizes it: exposure columns
-   (`n_observed_hours`/`n_observed_days`, derived from `liveness.parquet`, which survives deleting
-   clean data), rate features alongside the existing counts, matched controls, and bootstrap
-   confidence intervals. **Decision point:** if no normalized feature discriminates with a CI
-   excluding no-effect, stop and rethink detectors or geographic coverage before doing P3-4.
-2. **P3-4 (after P4-0): per-window storage pipeline**, so windows sampled across 2022-2024 can be
-   processed with a disk peak of ~1 window instead of the sum of all. Partition `liveness` by day,
-   make every detector write per-window artifacts, add thinned tracks for the map, and split
-   creation (`pipeline/window.py`, never deletes) from deletion (`pipeline/prune.py`, opt-in,
-   quarantine-first). The re-download drill (A0.4 in the plan) is the gate that must pass before any
-   deletion is trusted.
-3. **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless.
+**P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
 
 ## Blocked
 
@@ -187,18 +200,26 @@ either -- it carries the exact file paths, function signatures and safety gates.
 
 ## Open questions
 
-- **THE BIG ONE: the detectors appear to measure local operating volume, not evasion.** An ad-hoc
-  discriminative check run 2026-09-22 directly against the real panel (verified by hand, not
-  delegated): among tankers with a valid imo, vessels sanctioned AFTER window_end show *less* signal
-  than those never sanctioned -- 0.43 vs 0.73 gaps per voyage, 0.0% vs 0.5% with any STS episode,
-  5.9% vs 32.0% with any spoofing event, median 2 vs 3 voyages. Median message count is nearly
-  identical (23,245 vs 22,459), so this is **not** a raw-exposure artifact. The only feature pointing
-  the expected way is `n_draught_change_unexplained` (40.7% vs 24.6% of tankers) -- which is
-  precisely the fingerprint of a transfer happening OUTSIDE Danish coverage. Working interpretation:
-  a resident Danish ferry accumulates more events than a transiting tanker simply by being in front
-  of the receiver longer, so raw counts encode presence, not risk. **This is what P4-0 exists to
-  confirm or refute with proper normalization and matched controls.** Do not train anything until
-  it is resolved.
+- **THE BIG ONE, RESOLVED by P4-0 (2026-09-22): four of five detector families carry no rescuable
+  signal against the sanctions label in this window, with or without exposure normalization.** The
+  ad-hoc check that raised this question (below, kept for the record) hypothesized that raw counts
+  were confounded by local operating volume and that normalizing by exposure would rescue signal.
+  P4-0 formalized the test (`model/discriminative_check.py`: AUC + bootstrap CI + matched
+  ship_type/exposure controls, see `docs/STATE.md`'s Done section and `docs/DECISIONS.md`) and
+  found the hypothesis only half right: `n_draught_change_unexplained` was ALREADY discriminative
+  in raw form (AUC ~0.63) and stays so, matched or not, normalized or not -- consistent with the
+  original observation that it is the fingerprint of a transfer outside Danish coverage. But
+  `gaps`/`spoofing` remain actively `discriminates_opposite` and `sts`/`identity_anomalies`/
+  `destination_course_mismatch` remain non-discriminating in EVERY scope tested -- exposure was not
+  the confound suppressing their signal, and no amount of normalization changed that. **Formal
+  verdict: GO for P3-4** (the plan's literal rule only requires one normalized feature to clear the
+  bar), but Phase 4 must treat this as "one detector family works," not "the detectors work," and
+  say so in the README per `CLAUDE.md`'s limitations-disclosure agreement. Original ad-hoc numbers,
+  for the record: among tankers with a valid imo, vessels sanctioned AFTER window_end showed *less*
+  raw signal than those never sanctioned -- 0.43 vs 0.73 gaps per voyage, 0.0% vs 0.5% with any STS
+  episode, 5.9% vs 32.0% with any spoofing event, median message count nearly identical (23,245 vs
+  22,459, ruling out raw-exposure as a trivial explanation), `n_draught_change_unexplained` alone
+  pointing the expected way (40.7% vs 24.6% of tankers).
 - **No vessel-age (build-year) data exists anywhere in this project's ingested data.** Confirmed
   against the real clean-partition schema while building `features/panel.py` (P3-3): the DMA AIS
   feed carries no build-year field, and nothing else ingested so far (sanctions lists, GFW) carries

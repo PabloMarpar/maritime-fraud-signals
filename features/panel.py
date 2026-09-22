@@ -78,6 +78,34 @@ every count column and NULL in every mean/max column, never a missing row entire
 ``sts_gfw_agreement.parquet`` (P2-7) is explicitly OUT of scope -- it is a meta-validation table
 (detector-vs-GFW agreement), not a vessel risk signal, and is never read here.
 
+**Exposure and rate features (P4-0).** An ad-hoc discriminative check run 2026-09-22 directly
+against the real panel found that raw detector counts encode how much a vessel operates inside
+Danish AIS coverage, not evasion -- among tankers with a valid imo, later-sanctioned vessels showed
+LESS raw signal than never-sanctioned ones on every detector except
+``n_draught_change_unexplained`` (0.43 vs 0.73 gaps/voyage, 0.0% vs 0.5% any-STS, 5.9% vs 32.0%
+any-spoofing), with near-identical median message counts (23,245 vs 22,459) ruling out raw-message-
+volume as the explanation (see ``docs/DECISIONS.md``'s 2026-09-22 entry and ``docs/STATE.md``'s
+open questions). This module adds the normalized features ``model/discriminative_check.py`` (P4-0)
+needs to test whether *rates* of anomalous behaviour separate the two populations where raw counts
+do not -- added alongside every existing raw column, never replacing one.
+
+* ``n_observed_hours`` / ``n_observed_days``: this vessel-month's own exposure, derived from
+  ``detect.liveness``'s ``(cell_lat, cell_lon, cell_hour, mmsi)`` grain
+  (``count(DISTINCT cell_hour)`` / ``count(DISTINCT CAST(cell_hour AS DATE))``), never from raw
+  clean positions -- the only exposure measure that survives P3-4's eventual discard of clean data
+  (``liveness.parquet`` is ~2.1 MB/day vs 14.2 GB for 30 days of clean data). Left-joined like
+  every detector aggregate: 0, not a missing row, when a roster mmsi has no liveness rows this
+  month.
+* Rate columns, one triple per :data:`RATE_BASE_COLUMNS` entry (``n_gaps``,
+  ``n_gaps_high_probability``, ``n_spoofing_events_total``, ``n_sts_episodes``,
+  ``n_identity_anomalies_total``, ``n_destination_course_mismatch``,
+  ``n_draught_change_unexplained``): ``rate_<x>_per_voyage`` (÷ ``voyage_count``),
+  ``rate_<x>_per_observed_day`` (÷ ``n_observed_days``), ``rate_<x>_per_1000_messages``
+  (÷ ``total_message_count`` / 1000). Every denominator is wrapped in ``nullif(..., 0)`` so zero
+  exposure/voyages/messages this month gives NULL, never a divide-by-zero infinity -- NULL here
+  means "rate undefined", not "zero risk", and must be handled as a missing value, not imputed to
+  0, by anything that consumes these columns.
+
 **Temporal-cutoff filter on every detector join -- read this before trusting a multi-month build.**
 Every event is filtered to "knowable as of this vessel-month's end" before being aggregated, but the
 two detector families differ sharply in how trustworthy that cutoff actually is:
@@ -216,6 +244,7 @@ from pathlib import Path
 
 import duckdb
 
+from detect.liveness import LIVENESS_PATH
 from process.identity import IDENTITY_PATH
 from process.mid import country_of
 from process.partitions import existing_partitions
@@ -254,6 +283,20 @@ IDENTITY_ANOMALY_KINDS = (
     "shared_identity",
 )
 SPOOFING_KINDS = ("impossible_speed", "on_land", "synthetic_circle", "simultaneous_position")
+
+# P4-0: raw count columns that also get a rate triple (per voyage / per observed day / per 1,000
+# messages) -- see module docstring's "Exposure and rate features" section. Not every count column
+# in the panel gets one, only the ones the discriminative check plan (docs/PLAN_P4-0_P3-4.md, Part
+# B2) names.
+RATE_BASE_COLUMNS = (
+    "n_gaps",
+    "n_gaps_high_probability",
+    "n_spoofing_events_total",
+    "n_sts_episodes",
+    "n_identity_anomalies_total",
+    "n_destination_course_mismatch",
+    "n_draught_change_unexplained",
+)
 
 
 def _git_sha() -> str:
@@ -402,6 +445,69 @@ def _build_voyage_counts(
     )
 
 
+def _build_exposure(con: duckdb.DuckDBPyConnection, liveness_path: Path) -> None:
+    """Materialize `_exposure_agg`: (mmsi, year_month, n_observed_hours, n_observed_days).
+
+    P4-0's exposure measure -- see module docstring's "Exposure and rate features" section.
+    Derived from detect.liveness's (cell_lat, cell_lon, cell_hour, mmsi) grain by distinct-count,
+    never from raw clean positions, so it survives P3-4's eventual discard of clean data.
+    """
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE _exposure_agg AS "
+        "SELECT mmsi, date_trunc('month', cell_hour) AS year_month, "
+        "count(DISTINCT cell_hour) AS n_observed_hours, "
+        "count(DISTINCT CAST(cell_hour AS DATE)) AS n_observed_days "
+        f"FROM read_parquet('{liveness_path.as_posix()}') "
+        "GROUP BY mmsi, date_trunc('month', cell_hour)"
+    )
+
+
+# Qualified source expression for each RATE_BASE_COLUMNS entry -- the joined table's own
+# (possibly-NULL) column, NOT the panel SELECT's bare output alias of the same name.
+# **Do not "simplify" this back to a bare alias reference.** Verified directly against a real
+# query before writing this comment: several joined tables below (_gaps_agg, _spoofing_agg,
+# _sts_agg, _identity_agg, _behaviour_agg) define a real column with the SAME NAME as this
+# panel's own COALESCE(...) output alias (e.g. both `g.n_gaps` and this SELECT's own "n_gaps"
+# alias exist). DuckDB resolves an unqualified name in a later SELECT-list expression to the
+# JOINed table's column over the SELECT's own alias, so a rate expression written as bare
+# "n_gaps / ..." silently divides the raw (unCOALESCEd) NULL, not the intended 0, whenever this
+# vessel-month has no gap rows -- a real bug caught by tests/test_panel.py's zero-detector-events
+# case, not a hypothetical one.
+_RATE_NUMERATOR_SQL = {
+    "n_gaps": "COALESCE(g.n_gaps, 0)",
+    "n_gaps_high_probability": "COALESCE(g.n_gaps_high_probability, 0)",
+    "n_spoofing_events_total": "COALESCE(sp.n_spoofing_events_total, 0)",
+    "n_sts_episodes": "COALESCE(sts.n_sts_episodes, 0)",
+    "n_identity_anomalies_total": "COALESCE(ia.n_identity_anomalies_total, 0)",
+    "n_destination_course_mismatch": "COALESCE(bh.n_destination_course_mismatch, 0)",
+    "n_draught_change_unexplained": "COALESCE(bh.n_draught_change_unexplained, 0)",
+}
+
+
+def _rate_columns_sql() -> str:
+    """SQL fragment for the rate columns described in the module docstring's "Exposure and rate
+    features" section -- one triple per :data:`RATE_BASE_COLUMNS` entry, each dividing that
+    count (via its fully-qualified source in :data:`_RATE_NUMERATOR_SQL`, see that dict's own
+    comment on why a bare alias is unsafe here) by voyage_count / n_observed_days /
+    total_message_count, each likewise qualified to its own source table. Every denominator is
+    wrapped in nullif(..., 0) so zero exposure gives NULL ("rate undefined"), never a
+    divide-by-zero infinity.
+    """
+    parts = []
+    for count_col in RATE_BASE_COLUMNS:
+        numerator = _RATE_NUMERATOR_SQL[count_col]
+        short = count_col.removeprefix("n_")
+        parts.append(f"{numerator} / nullif(vc.voyage_count, 0) AS rate_{short}_per_voyage")
+        parts.append(
+            f"{numerator} / nullif(exp.n_observed_days, 0) AS rate_{short}_per_observed_day"
+        )
+        parts.append(
+            f"{numerator} / (nullif(r.total_message_count, 0) / 1000.0) "
+            f"AS rate_{short}_per_1000_messages"
+        )
+    return ", ".join(parts)
+
+
 def _build_panel_base(con: duckdb.DuckDBPyConnection) -> None:
     """Materialize `_panel_base`: (mmsi, year_month, month_end_ts), the panel's own grain.
 
@@ -518,6 +624,8 @@ _PANEL_SELECT_SQL = (
     "SELECT pb.mmsi, pb.year_month, "
     "r.imo, r.is_orphaned, r.is_reused, r.total_message_count, "
     "fc.flag_country, st.ship_type, COALESCE(vc.voyage_count, 0) AS voyage_count, "
+    "COALESCE(exp.n_observed_hours, 0) AS n_observed_hours, "
+    "COALESCE(exp.n_observed_days, 0) AS n_observed_days, "
     "COALESCE(g.n_gaps, 0) AS n_gaps, "
     "COALESCE(g.n_gaps_high_probability, 0) AS n_gaps_high_probability, "
     "g.mean_gap_probability, g.max_gap_duration_hours, "
@@ -539,6 +647,7 @@ _PANEL_SELECT_SQL = (
     "COALESCE(ia.n_identity_anomalies_total, 0) AS n_identity_anomalies_total, "
     "COALESCE(bh.n_destination_course_mismatch, 0) AS n_destination_course_mismatch, "
     "COALESCE(bh.n_draught_change_unexplained, 0) AS n_draught_change_unexplained, "
+    f"{_rate_columns_sql()}, "
     "COALESCE(sa.is_sanctioned_ever, false) AS label_is_sanctioned_ever, "
     "sa.earliest_designation_date AS label_earliest_designation_date, "
     "COALESCE(sa.earliest_designation_date <= ?, false) AS label_is_sanctioned_as_of_window_end, "
@@ -550,6 +659,7 @@ _PANEL_SELECT_SQL = (
     "LEFT JOIN _flag_country fc ON fc.mmsi = pb.mmsi "
     "LEFT JOIN _ship_type st ON st.mmsi = pb.mmsi "
     "LEFT JOIN _voyage_counts vc ON vc.mmsi = pb.mmsi "
+    "LEFT JOIN _exposure_agg exp ON exp.mmsi = pb.mmsi AND exp.year_month = pb.year_month "
     "LEFT JOIN _gaps_agg g ON g.mmsi = pb.mmsi AND g.year_month = pb.year_month "
     "LEFT JOIN _spoofing_agg sp ON sp.mmsi = pb.mmsi AND sp.year_month = pb.year_month "
     "LEFT JOIN _sts_agg sts ON sts.mmsi = pb.mmsi AND sts.year_month = pb.year_month "
@@ -568,6 +678,7 @@ def build_panel(
     voyages_path: Path = VOYAGES_PATH,
     detect_root: Path = DETECT_ROOT,
     clean_root: Path = CLEAN_ROOT,
+    liveness_path: Path = LIVENESS_PATH,
     out_path: Path = PANEL_PATH,
     force: bool = False,
 ) -> Path:
@@ -579,7 +690,8 @@ def build_panel(
     process.identity.resolve_range; missing sanctions_matches_path:
     process.sanctions_match.match_sanctions; missing voyages_path: process.tracks.reconstruct_range;
     missing any of the five detector tables under detect_root: their respective build_* function
-    (detect.gaps/spoofing/sts/identity_anomalies/behaviour).
+    (detect.gaps/spoofing/sts/identity_anomalies/behaviour); missing liveness_path:
+    detect.liveness.build_liveness (P4-0's exposure source, see module docstring).
 
     Opens exactly one DuckDB connection and reuses it across the whole build.
     """
@@ -601,6 +713,10 @@ def build_panel(
     if not voyages_path.exists():
         raise FileNotFoundError(
             f"No voyages table at {voyages_path}; run process.tracks.reconstruct_range first"
+        )
+    if not liveness_path.exists():
+        raise FileNotFoundError(
+            f"No liveness table at {liveness_path}; run detect.liveness.build_liveness first"
         )
     gaps_path = detect_root / "gaps.parquet"
     spoofing_path = detect_root / "spoofing.parquet"
@@ -631,6 +747,7 @@ def build_panel(
         _build_flag_country(con)
         _build_ship_type(con, partitions)
         _build_voyage_counts(con, voyages_path, window_start, window_end)
+        _build_exposure(con, liveness_path)
         _build_panel_base(con)
         _build_gaps_agg(con, gaps_path)
         _build_spoofing_agg(con, spoofing_path)
@@ -710,6 +827,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--clean-root", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
+    parser.add_argument(
+        "--liveness-path", default=str(LIVENESS_PATH), help="Path to the liveness table"
+    )
     parser.add_argument("--out-path", default=str(PANEL_PATH), help="Output path for the panel")
     parser.add_argument(
         "--force", action="store_true", help="Rebuild even if the output already exists"
@@ -730,6 +850,7 @@ def main(argv: list[str] | None = None) -> None:
         voyages_path=Path(args.voyages_path),
         detect_root=Path(args.detect_root),
         clean_root=Path(args.clean_root),
+        liveness_path=Path(args.liveness_path),
         out_path=Path(args.out_path),
         force=args.force,
     )

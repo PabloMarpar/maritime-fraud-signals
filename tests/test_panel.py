@@ -152,6 +152,22 @@ def _write_behaviour(path: Path, rows: list[tuple]) -> None:
         con.close()
 
 
+def _write_liveness(path: Path, rows: list[tuple]) -> None:
+    """rows: (mmsi, cell_hour). Only the two columns _build_exposure actually reads -- the real
+    table also carries cell_lat/cell_lon/is_class_a/etc, unused here, same minimal-fixture posture
+    as every other _write_* helper in this file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    try:
+        con.execute("CREATE TABLE t (mmsi BIGINT, cell_hour TIMESTAMP)")
+        if rows:
+            con.executemany("INSERT INTO t VALUES (?, ?)", rows)
+        con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
+    finally:
+        con.close()
+
+
 def _write_clean_partition(root: Path, day: date, rows: list[tuple]) -> None:
     """rows: (mmsi, ship_type)."""
     partition_dir = root / f"date={day.isoformat()}"
@@ -176,6 +192,7 @@ class _Paths:
         self.voyages = tmp_path / "tracks" / "voyages.parquet"
         self.detect_root = tmp_path / "detect"
         self.clean_root = tmp_path / "clean" / "ais_dk"
+        self.liveness = tmp_path / "coverage" / "liveness.parquet"
         self.out_path = tmp_path / "processed" / "vessel_month_panel.parquet"
 
     @property
@@ -210,6 +227,7 @@ def _build_minimal_inputs(
     identity_rows: list[tuple] | None = None,
     behaviour_rows: list[tuple] | None = None,
     clean_rows: list[tuple] | None = None,
+    liveness_rows: list[tuple] | None = None,
 ) -> None:
     _write_mmsi_imo(p.mmsi_imo, mmsi_imo_rows)
     _write_sanctions_matches(p.sanctions_matches, sanctions_rows or [])
@@ -220,6 +238,7 @@ def _build_minimal_inputs(
     _write_identity_anomalies(p.identity_anomalies, identity_rows or [])
     _write_behaviour(p.behaviour, behaviour_rows or [])
     _write_clean_partition(p.clean_root, WINDOW_START, clean_rows or [])
+    _write_liveness(p.liveness, liveness_rows or [])
 
 
 def _read_panel(out_path: Path) -> list[dict]:
@@ -243,6 +262,7 @@ def _run(p: _Paths, force: bool = False) -> Path:
         voyages_path=p.voyages,
         detect_root=p.detect_root,
         clean_root=p.clean_root,
+        liveness_path=p.liveness,
         out_path=p.out_path,
         force=force,
     )
@@ -281,6 +301,8 @@ def test_vessel_with_zero_detector_events_gets_zero_not_missing_row(tmp_path):
         "n_draught_change_unexplained",
         "voyage_count",
         "label_n_sanctions_sources",
+        "n_observed_hours",
+        "n_observed_days",
     ):
         assert row[count_col] == 0, count_col
     for mean_col in (
@@ -290,6 +312,16 @@ def test_vessel_with_zero_detector_events_gets_zero_not_missing_row(tmp_path):
         "max_sts_confidence",
     ):
         assert row[mean_col] is None, mean_col
+    # Zero voyages and zero observed days (no liveness rows) make those two denominators 0, so
+    # those rate columns must be NULL ("undefined"), never a divide-by-zero infinity or a silent
+    # 0. total_message_count is 50 (nonzero, from mmsi_imo_rows), so the per-1,000-messages rate
+    # has a defined (nonzero) denominator and correctly reads 0.0 -- zero events over known
+    # exposure, a real measured rate, not a missing one.
+    for count_col in panel.RATE_BASE_COLUMNS:
+        short = count_col.removeprefix("n_")
+        assert row[f"rate_{short}_per_voyage"] is None, short
+        assert row[f"rate_{short}_per_observed_day"] is None, short
+        assert row[f"rate_{short}_per_1000_messages"] == pytest.approx(0.0), short
     assert row["label_is_sanctioned_ever"] is False
     assert row["label_is_sanctioned_as_of_window_end"] is False
     assert row["label_is_sanctioned_after_window_end"] is False
@@ -331,6 +363,14 @@ def test_vessel_with_events_across_all_detectors_aggregates_correctly(tmp_path):
             (mmsi, "destination_course_mismatch", _ts(date(2024, 6, 12))),
         ],
         clean_rows=[(mmsi, "Tanker"), (mmsi, "Tanker"), (mmsi, "Cargo")],
+        # 4 distinct cell_hour values spanning 3 distinct dates -> n_observed_hours=4,
+        # n_observed_days=3.
+        liveness_rows=[
+            (mmsi, _ts(date(2024, 6, 2), 0)),
+            (mmsi, _ts(date(2024, 6, 2), 1)),
+            (mmsi, _ts(date(2024, 6, 3), 0)),
+            (mmsi, _ts(date(2024, 6, 4), 0)),
+        ],
     )
 
     _run(p)
@@ -355,6 +395,40 @@ def test_vessel_with_events_across_all_detectors_aggregates_correctly(tmp_path):
     assert row["n_identity_anomalies_total"] == 2
     assert row["n_destination_course_mismatch"] == 1
     assert row["n_draught_change_unexplained"] == 0
+
+    assert row["n_observed_hours"] == 4
+    assert row["n_observed_days"] == 3
+    # voyage_count=2, n_observed_days=3, total_message_count=50 (0.05 thousand) -- every rate
+    # column is the raw count divided by the matching denominator, exactly, never truncated or
+    # otherwise transformed.
+    assert row["rate_gaps_per_voyage"] == pytest.approx(2 / 2)
+    assert row["rate_gaps_per_observed_day"] == pytest.approx(2 / 3)
+    assert row["rate_gaps_per_1000_messages"] == pytest.approx(2 / 0.05)
+    assert row["rate_gaps_high_probability_per_voyage"] == pytest.approx(1 / 2)
+    assert row["rate_gaps_high_probability_per_observed_day"] == pytest.approx(1 / 3)
+    assert row["rate_gaps_high_probability_per_1000_messages"] == pytest.approx(1 / 0.05)
+    assert row["rate_spoofing_events_total_per_voyage"] == pytest.approx(3 / 2)
+    assert row["rate_spoofing_events_total_per_observed_day"] == pytest.approx(3 / 3)
+    assert row["rate_spoofing_events_total_per_1000_messages"] == pytest.approx(3 / 0.05)
+    assert row["rate_sts_episodes_per_voyage"] == pytest.approx(2 / 2)
+    assert row["rate_sts_episodes_per_observed_day"] == pytest.approx(2 / 3)
+    assert row["rate_sts_episodes_per_1000_messages"] == pytest.approx(2 / 0.05)
+    assert row["rate_identity_anomalies_total_per_voyage"] == pytest.approx(2 / 2)
+    assert row["rate_identity_anomalies_total_per_observed_day"] == pytest.approx(2 / 3)
+    assert row["rate_identity_anomalies_total_per_1000_messages"] == pytest.approx(2 / 0.05)
+    assert row["rate_destination_course_mismatch_per_voyage"] == pytest.approx(1 / 2)
+    assert row["rate_destination_course_mismatch_per_observed_day"] == pytest.approx(1 / 3)
+    assert row["rate_destination_course_mismatch_per_1000_messages"] == pytest.approx(1 / 0.05)
+    assert row["rate_draught_change_unexplained_per_voyage"] == pytest.approx(0.0)
+    assert row["rate_draught_change_unexplained_per_observed_day"] == pytest.approx(0.0)
+    assert row["rate_draught_change_unexplained_per_1000_messages"] == pytest.approx(0.0)
+
+    # other_mmsi has no liveness rows of its own -> exposure coalesces to 0, so its own rate
+    # columns (denominators all 0) must be NULL, not an error or a copy of mmsi's.
+    other_row = rows[other_mmsi]
+    assert other_row["n_observed_hours"] == 0
+    assert other_row["n_observed_days"] == 0
+    assert other_row["rate_sts_episodes_per_observed_day"] is None
 
     # other_mmsi is the counterparty on both sts episodes (so it does count those), but has its
     # own row with every OTHER detector's counts correctly zeroed, not a missing row.
@@ -581,6 +655,18 @@ def test_raises_when_voyages_path_missing(tmp_path):
         _run(p)
 
 
+def test_raises_when_liveness_path_missing(tmp_path):
+    p = _Paths(tmp_path)
+    _write_mmsi_imo(
+        p.mmsi_imo, [(219000016, VALID_IMO_A, 5, date(2024, 6, 1), date(2024, 6, 5), False, False)]
+    )
+    _write_sanctions_matches(p.sanctions_matches, [])
+    _write_voyages(p.voyages, [])
+    # liveness.parquet deliberately not written.
+    with pytest.raises(FileNotFoundError):
+        _run(p)
+
+
 def test_raises_when_a_detector_table_missing(tmp_path):
     p = _Paths(tmp_path)
     _write_mmsi_imo(
@@ -588,6 +674,7 @@ def test_raises_when_a_detector_table_missing(tmp_path):
     )
     _write_sanctions_matches(p.sanctions_matches, [])
     _write_voyages(p.voyages, [])
+    _write_liveness(p.liveness, [])
     _write_gaps(p.gaps, [])
     _write_spoofing(p.spoofing, [])
     _write_sts(p.sts, [])
@@ -621,6 +708,16 @@ def test_label_columns_are_the_only_ones_naming_sanctions(tmp_path):
         lowered = column.lower()
         assert "sanction" not in lowered, column
         assert "designat" not in lowered, column
+
+    # P4-0's exposure/rate columns must land as ordinary features, never under the label_ prefix
+    # -- wired in here so a future rename can't silently move one into the label contract above.
+    expected_rate_columns = {
+        f"rate_{col.removeprefix('n_')}_{suffix}"
+        for col in panel.RATE_BASE_COLUMNS
+        for suffix in ("per_voyage", "per_observed_day", "per_1000_messages")
+    }
+    assert expected_rate_columns <= non_label_columns
+    assert {"n_observed_hours", "n_observed_days"} <= non_label_columns
 
 
 def test_raises_when_no_clean_partitions_in_range(tmp_path):

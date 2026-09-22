@@ -885,3 +885,56 @@ _2026-09-22_ (planning session: where the project goes after P3-3)
   Reason: discarding clean data is the only irreversible operation in the project, and a bug in the
   creation path must not be able to reach it. The fingerprints plus a mandatory re-download drill
   convert "irreversible" into "verifiably reproducible from source".
+
+_2026-09-22_ (P4-0 executed: the discriminative check)
+
+- **P4-0 ran to completion. Verdict: GO, but narrowly, and only one detector family carries the
+  signal.** `features/panel.py` gained `n_observed_hours`/`n_observed_days` (from
+  `detect.liveness`, survives discarding clean data) and 21 `rate_*` columns (per-voyage,
+  per-observed-day, per-1,000-messages, for each of `n_gaps`, `n_gaps_high_probability`,
+  `n_spoofing_events_total`, `n_sts_episodes`, `n_identity_anomalies_total`,
+  `n_destination_course_mismatch`, `n_draught_change_unexplained` -- `RATE_BASE_COLUMNS`), added
+  alongside every existing raw count. `model/discriminative_check.py` compares
+  `label_is_sanctioned_after_window_end` (147 positives) against never-sanctioned vessels (4,717
+  negatives) within `imo IS NOT NULL`, excluding the 17 already-sanctioned-as-of-window_end rows
+  from both classes, with AUC + 95% stratified-bootstrap CI + Mann-Whitney p per feature, in both
+  an unmatched and a `(ship_type, n_observed_days quintile)`-matched scope (10 groups contain both
+  classes; 3,011/4,864 rows fall in one -- effectively a Tanker-and-thinly-Cargo comparison, since
+  135/147 positives are Tanker and 9 are Cargo, matching the ad-hoc check's own population).
+  **Real result: `n_draught_change_unexplained` (raw AND all 3 of its rate variants) is the ONLY
+  feature that discriminates in the expected direction, in BOTH scopes** (AUC 0.60-0.65 unmatched,
+  0.60-0.62 matched, CI excluding 0.5 in every case). **Matching and normalization did not rescue
+  any of the other four detector families** -- `gaps` and `spoofing` remain `discriminates_opposite`
+  in both scopes (AUC 0.26-0.33), `sts` is `discriminates_opposite` with a tiny, barely-excluding-
+  0.5 effect (AUC ~0.47-0.49), and `identity_anomalies`/`destination_course_mismatch` are
+  `no_discrimination` in both scopes. Normalizing by exposure did not change any feature's verdict
+  category from its raw count's own verdict -- the confound the plan set out to correct turned out
+  not to be what was suppressing signal in the other four families; `n_draught_change_unexplained`
+  was already discriminative even in raw form, exactly as the original ad-hoc check's own
+  observation flagged (see the prior 2026-09-22 planning entry above).
+- **Reading of the GO decision: real, but narrow.** Per the plan's literal rule (any matched,
+  normalized feature discriminating with a CI excluding no-effect is a GO), P4-0 passes and P3-4
+  may proceed. This must not be reported as "the detectors work" -- four of five detector families
+  show no rescuable signal against this label in this window, with or without normalization. Phase
+  4 should expect `draught_change_unexplained`-derived features to dominate any model's importance
+  ranking, and the README's limitations section (`CLAUDE.md`'s working agreement) must say this
+  plainly rather than let a headline AUC imply all five detectors contribute.
+- **A real DuckDB correctness bug found and fixed while building the rate columns, before trusting
+  any of the above.** A rate expression written as a bare `n_gaps / nullif(voyage_count, 0)`
+  silently divided by NULL, not the intended 0, for every vessel-month with zero events that
+  month: several joined tables (`_gaps_agg`, `_spoofing_agg`, `_sts_agg`, `_identity_agg`,
+  `_behaviour_agg`) each define a real column with the SAME NAME as the panel's own
+  `COALESCE(...)` output alias (e.g. both `g.n_gaps` and the SELECT's own `n_gaps`), and DuckDB
+  resolves a later bare reference to the JOINed table's column over the SELECT's own alias. Caught
+  by `tests/test_panel.py`'s existing zero-detector-events test, not assumed safe. Fixed by fully
+  qualifying every rate numerator/denominator to its source table (`_RATE_NUMERATOR_SQL` in
+  `features/panel.py`) rather than relying on same-SELECT alias back-reference at all.
+- **A second real bug found while writing `model/discriminative_check.py`'s own tests: the
+  `n_bootstrap` argument was accepted but silently ignored**, with the bootstrap loop always using
+  the module-level default (2000) regardless of what was passed in. Invisible against real data
+  (the CLI default already equals the hardcoded value), but made every test using a smaller
+  `n_bootstrap` for speed hang for ~2 seconds per feature-scope evaluation instead of the
+  milliseconds intended -- caught by the test suite unexpectedly timing out, not by inspection.
+  Fixed by threading `n_bootstrap` through `_evaluate_feature` explicitly. The real 2026-09-22 GO
+  result above was computed before AND after this fix with identical numbers (both runs used the
+  same effective bootstrap count), so it is not affected.
