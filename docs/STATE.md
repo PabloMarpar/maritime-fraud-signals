@@ -181,35 +181,28 @@ _Last updated: 2026-09-22_
 ## In progress
 
 **P3-4, Part A: per-window storage pipeline -- A1 done, A2-A5 not started.** Full spec:
-`docs/PLAN_P4-0_P3-4.md` (committed to the repo). **A1 (make `liveness` accumulable by day) is
-done and verified on real data**: `detect/liveness.py`'s `build_liveness` now writes one
-day-partition at a time (`data/coverage/liveness/date=YYYY-MM-DD/part-0.parquet`, atomic writes,
-skips days already built unless `force=True`); `liveness_verdict` accepts that directory (new
-default) or a single legacy whole-range file (still supported). A1.1's denominator fix (exact
-day-count in directory mode, replacing the old span-based arithmetic that silently overcounts
-under disjoint coverage and biases toward `no_evidence`) is implemented and unit-tested with a
-disjoint-coverage fixture. Real migration: rebuilt `data/coverage/liveness/` over the full
-2024-06-01..2024-06-30 window (3,988,982 rows, matching the legacy file exactly) while the legacy
-file still exists on disk (nothing deleted -- deletion is A5's job, not A1's). Equivalence check
-against `detect.gaps` passed exactly: 74,546 candidate gaps, identical verdict breakdown, zero
-row-level differences against the existing real `gaps.parquet`. A real performance bug (a naive
-per-call directory stat loop, 2-3 million filesystem stats projected) was found and fixed via a
-cached one-time directory listing before this check could even finish -- directory mode is now
-~3x faster than the old single-file mode, not just no-worse. 28 new/rewritten tests (`tests/
-test_liveness.py`), 365 total, `ruff` clean. Full detail in `docs/DECISIONS.md`'s 2026-09-22
-entry. **Not started yet**: A2 (per-window artifacts for every detector plus a `ship_type`
-reference table -- also touches `process/tracks.py`/`process/identity.py`, which still write
-single whole-range files), A3 (`process/thin.py`), A4 (`pipeline/window.py`), A5
-(`pipeline/prune.py` + the A0.4 re-download drill, the gate before any deletion is trusted).
+`docs/PLAN_P4-0_P3-4.md`. **A1 done 2026-09-22**: `detect/liveness.py`'s `build_liveness` now
+writes one day-partition at a time (`data/coverage/liveness/date=.../part-0.parquet`, atomic,
+skips days already built) instead of one whole-range file the next window would overwrite;
+`liveness_verdict` accepts that directory (new default) or a legacy whole-range file (still
+supported). Includes A1.1's denominator fix (exact day-count, not span, under disjoint coverage --
+the old arithmetic silently biased verdicts toward `no_evidence`). Verified on real data: migrated
+2024-06-01..2024-06-30 (3,988,982 rows, matches the legacy file exactly), and `detect.gaps`
+rebuilt against it reproduces the existing real `gaps.parquet` row for row (74,546 gaps, zero
+diffs). A real perf bug (naive per-day stat loop) found and fixed along the way -- directory mode
+is now ~3x faster than the legacy path, not just equivalent. 365 tests, `ruff` clean. Full detail:
+`docs/DECISIONS.md`'s 2026-09-22 entry.
 
 ## Next up
 
-**Continue P3-4/A2**: per-window artifacts. `data/<kind>/window=<start>_<end>/part-0.parquet` for
-every detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`, `behaviour`) and for
-`process/tracks.py`/`process/identity.py` (currently single whole-range files, same overwrite
-problem A1 fixed for `liveness`), plus a new `data/reference/ship_type/window=.../part-0.parquet`
-so `features/panel.py:365` and `detect/identity_anomalies.py:461` stop reading clean partitions
-directly. See `docs/PLAN_P4-0_P3-4.md`'s A2 section for the exact hard blocker list.
+**P3-4/A2**: per-window artifacts. `data/<kind>/window=<start>_<end>/part-0.parquet` for every
+detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`, `behaviour`) AND for
+`process/tracks.py`/`process/identity.py` (same overwrite problem A1 just fixed for `liveness`,
+still unfixed there), plus a new `data/reference/ship_type/window=.../part-0.parquet` so
+`features/panel.py:365` and `detect/identity_anomalies.py:461` stop reading clean partitions
+directly. See `docs/PLAN_P4-0_P3-4.md`'s A2 section for the exact hard-blocker list. After A2:
+A3 (`process/thin.py`), A4 (`pipeline/window.py`, creates only), A5 (`pipeline/prune.py`, deletes
+with quarantine -- gated on the A0.4 re-download drill, not yet run).
 
 **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
 
