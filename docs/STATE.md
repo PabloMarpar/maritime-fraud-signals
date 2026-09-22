@@ -178,48 +178,19 @@ _Last updated: 2026-09-22_
   detectors work" -- four of five families show no rescuable signal here; the README's limitations
   section must say so plainly.** 360 tests pass (13 new), `ruff` clean.
 
-- **P3-4 done: the full per-window storage pipeline, A1-A5, all 2026-09-22.** Full spec:
-  `docs/PLAN_P4-0_P3-4.md`. Full real numbers and every bug found/fixed for each sub-part are in
-  `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A5" entries; headline only, here:
-  - **A1**: `detect/liveness.py` writes liveness day-partitioned (`date=.../part-0.parquet`),
-    including the critical baseline-denominator fix (disjoint-coverage span was silently biasing
-    verdicts toward `no_evidence`). Verified byte-for-byte against the existing legacy artifacts.
-  - **A2**: every detector + `process/tracks.py`/`process/identity.py` write window-partitioned
-    (`window=<start>_<end>/part-0.parquet`) instead of one whole-range file the next window
-    overwrote. New `process/ship_type.py` fixes the ship_type hard blocker. Real-window
-    equivalence check passed for all 9 real builds against the legacy artifacts (row-for-row,
-    modulo two known pre-existing non-deterministic tie-breaks, not regressions -- see open
-    questions). `detect/gaps.py` deliberately NOT converted (the plan's own consumer, not
-    producer, list) -- stays a single legacy whole-range file.
-  - **A3**: `process/thin.py`, day-partitioned downsampled tracks (~5min buckets) for the Phase 5
-    map only, never re-detection. Real 30-day run: 452 MB, 21,146 distinct mmsi (matches the
-    panel's roster exactly).
-  - **A4**: `pipeline/window.py`, the per-window orchestrator (creates only, never deletes) --
-    backfill+liveness over the lead-in range, then thin/ship_type/tracks/identity/detectors over
-    the window itself, `_verify_window()` reads every artifact back with DuckDB, records a
-    fingerprint + `verified_at` per day only if all pass. Validated end to end against real data,
-    including a `--force`-less re-run confirming full idempotency. Fixed a real bug: raw min/max
-    bbox was swamped by known corrupted-coordinate outliers -- now uses `detect.spoofing`'s own
-    tail-quantile crop.
-  - **A5**: **A0.4 re-download drill PASSED first (the mandatory gate)** -- 2024-06-15 quarantined
-    to `.trash`, re-downloaded, re-cleaned, A0.3 fingerprint matched exactly on both copies
-    (10,839,896 rows, 5,085 distinct mmsi, identical timestamp range and bbox); the DMA S3 archive
-    is confirmed stable for re-download in practice, not just in principle. (The download itself
-    needed 4 attempts this session due to `httpx.ReadTimeout`s unrelated to the drill's outcome --
-    see open questions.) `pipeline/prune.py` then built: dry-run by default, `--yes-delete` opt-in,
-    `.no-prune` kill switch, `--max-days` cap, manifest backed up before every run,
-    quarantine-then-empty-next-invocation for `.trash` (A0.2). Candidate days (`verified_at`
-    present, `clean_discarded_at` absent) are grouped into maximal contiguous runs to locate the
-    exact `window=<start>_<end>` artifact each gate re-reads (the manifest carries `verified_at`
-    per DAY with no window boundary alongside it) -- confirmed against the real manifest, where
-    only 2024-06-10/06-11 carry `verified_at` and form exactly the real
-    `window=2024-06-10_2024-06-11` artifact set. Every gate re-reads the artifacts fresh (never
-    trusts the earlier `verified_at`), including a statistical sanity gate comparing each
-    window's per-day event rate against the real June 2024 totals (7 of the plan's 8 named checks
-    -- `detect.gaps` can't be included, see A2 above). Real dry-run smoke test against `data/`
-    (never `--yes-delete`): the default 30-day lead-in correctly blocks 2024-06-10/06-11 (not
-    enough real prior data exists before 2024-06-01); a 5-day lead-in that fits inside the real
-    backfilled month passes every gate cleanly. 30 new tests, 429 total, `ruff` clean throughout.
+- **P3-4 done: the full per-window storage pipeline (A1-A5), 2026-09-22.** Windows can now be
+  built and safely pruned without keeping a whole month's clean data on disk. Detectors,
+  `process/tracks.py`/`identity.py` write window-partitioned artifacts; `detect/liveness.py` and
+  the new `process/thin.py` write day-partitioned ones; `pipeline/window.py` orchestrates
+  build→verify→fingerprint (creates only, never deletes); `pipeline/prune.py` is the only place
+  deletion happens (quarantine-first via `.trash`, dry-run by default, `--yes-delete` opt-in,
+  every gate re-evaluated at deletion time, not just at build time). The mandatory A0.4
+  re-download drill PASSED first: a real day quarantined, re-downloaded and re-cleaned reproduced
+  an identical fingerprint, confirming the DMA archive is stable enough to trust deletion against.
+  `pipeline/prune.py` has been dry-run-tested against real data but never actually run with
+  `--yes-delete` -- the 30-day window's clean data and every legacy single-file artifact are still
+  all on disk. 429 tests, `ruff` clean. Full real numbers and every bug found per sub-part:
+  `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A5" entries; full spec: `docs/PLAN_P4-0_P3-4.md`.
 
 ## Next up
 
