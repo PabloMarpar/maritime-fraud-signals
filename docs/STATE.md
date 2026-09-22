@@ -208,11 +208,23 @@ questions); every substantive column matched exactly except a few float-last-bit
 differences of the same class. 381 tests, `ruff` clean. Full detail:
 `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A2" entry.
 
+**A3 done 2026-09-22**: `process/thin.py` -- day-partitioned downsampled tracks
+(`data/tracks/thin/date=.../part-0.parquet`, one row per (mmsi, 5-minute bucket)) for the Phase 5
+map and manual review only, never for re-detection. Day-partitioned like A1's `detect.liveness`,
+not window-partitioned like A2's detectors, since a thinned day never changes once a later window
+is built. A real-schema mismatch found before the first real run (clean partitions carry
+`navigational_status`, not the plan's `nav_status` shorthand -- fixed by aliasing on read). Real
+run over the full 2024-06-01..2024-06-30 window: 452 MB, 26,333,818 rows, 21,146 distinct mmsi
+across 30 day-partitions (matches `features.panel`'s own whole-window mmsi roster exactly); one
+real day measured first (18 MB/day) confirmed the default 5-minute interval stays within the
+plan's 10-25 MB/day budget, so it was not widened. 9 new tests, 390 total, `ruff` clean. Full
+detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A3" entry.
+
 ## Next up
 
-**P3-4/A3**: `process/thin.py`, downsampled tracks (~5min buckets) for the Phase 5 map and manual
-review only -- never for re-detection. Measure real per-day size before committing to the interval.
-After A3: A4 (`pipeline/window.py`, creates only) and A5 (`pipeline/prune.py`, deletes with
+**P3-4/A4**: `pipeline/window.py` -- orchestrates the whole per-window build (backfill -> liveness
+-> thin/ship_type/tracks/identity -> detectors -> `_verify_window()` -> fingerprint + mark
+`verified_at`), creates only, never deletes. After A4: **A5** (`pipeline/prune.py`, deletes with
 quarantine -- gated on the A0.4 re-download drill, not yet run).
 
 **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
@@ -354,7 +366,9 @@ identity_anomalies,behaviour}/`, `data/tracks/voyages/`, `data/identity/mmsi_imo
 `data/reference/ship_type/` each hold one `window=2024-06-01_2024-06-30/` partition ALONGSIDE
 their legacy single-file counterpart (same "both present until A5 prunes" posture as A1's
 liveness migration) — measured real total ~115 MB added (dominated by `spoofing/`'s 109 MB,
-matching its on_land-heavy legacy file), well within budget. One raw day
+matching its on_land-heavy legacy file), well within budget. Post-P3-4/A3, `data/tracks/thin/`
+holds 30 real day-partitions at the default 5-minute interval, 452 MB total (~18 MB/day) — no
+legacy counterpart, this is a wholly new artifact. One raw day
 ≈ 507 MB, discarded immediately after cleaning by `pipeline/backfill.py`. Phase 3-4's "years of
 depth" requirement (several validation cutoffs `T`, each needing data before and after) should
 still be met by **sampling short windows around each cutoff**, not downloading every day, and

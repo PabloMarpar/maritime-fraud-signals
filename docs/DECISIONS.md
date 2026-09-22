@@ -1083,3 +1083,26 @@ new ship_type reference)
   row-id) added to the `lag()` window, out of scope for a storage-layout change. Revisit if
   reproducibility of exact spoofing counts across reruns ever matters downstream; `detect.sts`'s
   `nav_status` `mode()` tie-break (see above) is the same class of issue.
+
+_2026-09-22_ (P3-4/A3 session)
+
+- **P3-4/A3 done: `process/thin.py`, day-partitioned downsampled tracks
+  (`data/tracks/thin/date=YYYY-MM-DD/part-0.parquet`) for the Phase 5 map and manual review only,
+  never for re-detection.** Bucketing: `time_bucket(INTERVAL 'N minutes', timestamp)` +
+  `row_number() OVER (PARTITION BY mmsi, bucket ORDER BY timestamp) = 1`, keeping
+  `mmsi, timestamp, latitude, longitude, sog, cog, nav_status, ship_type`. Day-partitioned like
+  `detect.liveness.build_liveness` (P3-4/A1), not window-partitioned like P3-4/A2's detectors, since
+  a thinned day never changes once a later window is built -- idempotent per day, same contract.
+  A real-schema mismatch found before the first real run: the clean partition's navigational-status
+  column is named `navigational_status`, not `nav_status` (the plan's own shorthand, already used by
+  `detect.sts`'s output) -- fixed by aliasing on read (`navigational_status AS nav_status`) so the
+  output matches the plan spec and `detect.sts`'s naming without renaming the source column. 9 new
+  tests, 390 total, `ruff` clean.
+- **Real run over the full 2024-06-01..2024-06-30 window at the default 5-minute interval: 452 MB
+  total, 26,333,818 rows, 21,146 distinct mmsi across 30 day-partitions.** One real day
+  (2024-06-01) measured first: 18 MB, 985,725 rows, 7,232 distinct mmsi -- within the plan's
+  10-25 MB/day estimate, so the default interval is kept rather than widened to 10-15 minutes. The
+  full window's distinct-mmsi count (21,146) matches `features.panel`'s own whole-window roster
+  count exactly, a real-data sanity check that thinning lost no vessel. Reduction ratio: 14.2 GB of
+  clean data for the window down to 452 MB (~3.2%), the same order of magnitude as every other
+  P3-4 storage reduction (see `docs/STATE.md`'s disk-budget section).
