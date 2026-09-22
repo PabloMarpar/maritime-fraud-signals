@@ -761,3 +761,77 @@ _2026-09-21_ (P3-2 session: sanctions-to-AIS identity join)
   follows its `designation_date`. Turning "matched, designated on date D" into a temporally sound
   per-vessel-month label (not using a designation before it was actually knowable) is explicitly
   left to P3-3, per `CLAUDE.md`'s leakage rule -- not decided or pre-empted here.
+
+_2026-09-21_ (P3-3 session: labelled vessel-month panel)
+
+- **Three-way sanctions label split (`is_sanctioned_ever` / `is_sanctioned_as_of_window_end` /
+  `is_sanctioned_after_window_end`), all three kept, none collapsed into a single label column.**
+  P3-2 left "how to turn a sanctions match into a temporally sound label" as an open question
+  (`docs/STATE.md`). A single boolean would either look backward (already-sanctioned vessels still
+  transiting -- interesting, but not a forward prediction) or forward (designated after the
+  observation window -- the genuinely predictive population), and conflating the two would let a
+  model "predict" a designation that had already happened before the observation window, which
+  isn't prediction at all. Keeping all three, plus `earliest_designation_date` and
+  `n_sanctions_sources` (corroboration strength), lets Phase 4 make the actual modelling choice
+  (most likely `is_sanctioned_after_window_end` as the positive class) with full information rather
+  than having `features/panel.py` pre-empt it. Real run: 164 ever-matched, 17 already sanctioned as
+  of window_end, 147 only after -- the 147 is the real, non-synthetic forward-looking population
+  Phase 4 will most likely train on.
+- **`gaps`/`spoofing`/`sts` are filtered into each vessel-month using each event's own timestamp as
+  a `knowable_at` proxy (`gap_end`/`event_time`/`end_time`), NOT a verified temporal-leakage
+  guarantee.** Unlike `identity_anomalies`/`behaviour` (which carry a real `knowable_at`, the
+  product of a dedicated P2-5/P2-6 review pass), these three detector tables have no such column at
+  all. All three are batch, whole-window detectors whose scores lean on whole-window computation
+  (`detect.liveness`'s leave-one-out corroboration for `gaps`, repetition/pattern scores for `sts`)
+  -- plausibly the same "only truly knowable at window_end" shape P2-5/P2-6 found and fixed for the
+  other two tables, but nobody has checked this specifically. Using the event's own timestamp is
+  harmless for the current single-month panel (both quantities land in the same month regardless)
+  but is a documented, real blocker for P4-3's multi-month rolling-cutoff design -- recorded as its
+  own open-question entry in `docs/STATE.md`, not left as a code comment.
+- **Real run confirms the `knowable_at` filter is not always a no-op, even within a single month.**
+  P2-5/P2-6 found every real `identity_anomalies`/`behaviour` event's `knowable_at` equalled
+  `window_end` exactly in the 2024-06 build, which could have been (mis)read as "the filter never
+  actually does anything here." Checked directly against the real panel build, not assumed: 6 of
+  152 real `destination_course_mismatch` events have a voyage ending in the final minutes of
+  2024-06-30, so `knowable_at` (`end_time + DEFAULT_GAP_HOURS`, per `detect.behaviour`) spills into
+  2024-07-01 -- after `window_end` -- and the panel's filter correctly drops exactly those 6. Worth
+  recording because it demonstrates the filter earning its keep on real data, not just passing a
+  synthetic unit test.
+- **No vessel-age data exists anywhere in this project.** Confirmed against the real clean-partition
+  schema while building this module (the task spec already suspected this; verified, not assumed).
+  Blocks P4-1's naive baseline exactly as specified; see `docs/STATE.md`'s open questions.
+- **Real run 2026-09-21: `data/processed/vessel_month_panel.parquet`, 21,146 rows (one per distinct
+  mmsi in the 2024-06 window, all in a single `year_month`), 4,881 with a valid imo (16,265
+  orphaned, 1 reused).** `flag_country` resolved for 21,106/21,146 (99.8%); `ship_type` resolved for
+  all 21,146. Detector aggregate totals reproduce every prior phase's own real-run numbers exactly:
+  gaps 74,546 (72,631 >=0.6 probability), spoofing 10,098,760, sts 3,350 episode-sides (a vessel
+  counted once per episode it participates in, on either side), identity_anomalies 265, behaviour
+  152 `destination_course_mismatch` + 764 `draught_change_unexplained` before the `knowable_at`
+  filter (146 after, see above). 15 new tests (345 total), `ruff` clean.
+
+_2026-09-22_ (P3-3 review-and-pause session)
+
+- **The "sts 3,350 episode-sides ... exactly" claim two paragraphs above is WRONG, caught by
+  `analyst-review`, not by the original build.** Real raw count is 1,689 episodes = 3,378
+  episode-sides; 3,350 is 3,378 minus 14 episodes (28 sides) whose `end_time` is exactly
+  `2024-07-01 00:00:00`, correctly right-censored by the panel's `<= month_end_ts` cutoff filter.
+  The filter's behaviour is correct and conservative; the word "exactly" above is simply false.
+  Left the original paragraph unedited above (append-only) rather than rewritten, per this file's
+  own convention -- this entry is the correction of record.
+- **P3-3 was reverted from `done: true` to `done: false` in `tasks.json`, despite `features/panel.py`
+  passing all 345 tests and landing a real, working panel.** Reason: `analyst-review`, run
+  specifically because this panel is the direct input to Phase 4's modelling (per `CLAUDE.md`'s
+  instruction to run it after any modelling-adjacent change), found four real defects that would
+  silently corrupt Phase 4's results if left as-is -- an undocumented population restriction
+  (orphaned MMSI can never be positively labelled, and `is_orphaned` is itself a feature, so a naive
+  model would trivially "solve" the panel by re-deriving the sanctioner's own selection criterion),
+  label columns indistinguishable from features by name, the sts miscount above, and an incomplete
+  P4-3 blocker list. None of these is a live leak in the current single-month build, but the project
+  standard here is that "tests pass" and "methodologically sound enough to build a career-relevant
+  result on" are different bars, and `CLAUDE.md` is explicit that this project treats the second bar
+  as the one that counts. A fix pass covering all four (plus four cheaper documentation-only
+  corrections analyst-review also found) was fully specified and dispatched but was interrupted by a
+  session rate limit before finishing -- see `docs/STATE.md`'s "In progress" entry for the complete,
+  ready-to-resume fix list. Nothing from the fix pass is committed; `features/panel.py`'s docstring
+  carries an explicit warning block (added this session) flagging that its prose describes the
+  target end-state, not yet the real code, so a future reader isn't misled by the mismatch.
