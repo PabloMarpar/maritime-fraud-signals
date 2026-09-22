@@ -845,3 +845,43 @@ _2026-09-22_ (P3-3 review-and-pause session)
   reused, 164/17/147 sanctions split) -- confirming the fix pass only touched column names and
   documentation, not the underlying computation. 346 tests pass (345 + the new guard test), `ruff`
   clean. `tasks.json` marks P3-3 `done: true`.
+
+_2026-09-22_ (planning session: where the project goes after P3-3)
+
+- **Modelling is gated behind a discriminative check (new task P4-0), which must pass before P4-1.**
+  Reason: an ad-hoc version run this session against the real panel says the detectors do not
+  separate later-sanctioned vessels from the rest -- among tankers with a valid imo, positives show
+  0.43 vs 0.73 gaps per voyage, 0.0% vs 0.5% any-STS, 5.9% vs 32.0% any-spoofing, with near-identical
+  median message counts (23,245 vs 22,459), so it is not a raw-exposure artifact. Building models on
+  features that demonstrably encode local operating volume rather than evasion would produce a
+  result that looks fine and means nothing, which is exactly the failure mode `CLAUDE.md` exists to
+  prevent.
+- **Exposure is measured from `liveness.parquet`, not from the clean partitions.** Its
+  `(cell_lat, cell_lon, cell_hour, mmsi)` grain yields observed-hours and observed-days per mmsi by
+  distinct-count. Reason: it is the only exposure measure that survives discarding clean data, so
+  the normalized features stay computable under P3-4's storage regime rather than silently becoming
+  unbuildable the moment positions are deleted.
+- **P4-0 (the check) runs BEFORE P3-4 (the storage work), reversing the order originally requested.**
+  Reason: P3-4 is days of work whose entire purpose is enabling more data; if normalized features
+  still fail to discriminate, more data of the same kind does not fix it and the effort would be
+  wasted. The check is roughly half a day.
+- **`detect.liveness` was investigated as a suspected blocker for discarding clean data and cleared.**
+  `liveness_verdict` reads only `liveness.parquet` (2.1 MB/day), never clean positions, and
+  `detect.gaps` reads only that plus `voyages.parquet`. The real obstacle is that it -- like every
+  detector -- writes one whole-range file, so window N+1 overwrites N. Recorded because the opposite
+  was assumed out loud earlier in the same session and the assumption drove the initial plan.
+- **`liveness` will be partitioned by day rather than kept as a union view or appended-and-rewritten.**
+  Reason: a DuckDB view is invisible to a fresh connection, and rewriting a multi-GB file once per
+  window is quadratic I/O. Day partitions also make provenance exact for disjoint sampled ranges and
+  give partition pruning, which `score_gap`'s per-gap call pattern needs to stay tractable.
+- **`liveness_verdict`'s `baseline_hours_available` must be computed from actually-covered days, not
+  a span.** Reason: with disjoint sampled windows the naive span at `liveness.py:407-414` over-counts
+  the denominator, understating `expected_corroborators` and biasing every verdict toward
+  `no_evidence` -- a silent, systematic miscalibration rather than a visible failure.
+- **Artifact creation and data deletion are split into two commands that never run together**
+  (`pipeline/window.py` creates and never deletes; `pipeline/prune.py` deletes, opt-in behind
+  `--yes-delete`, quarantine-first via `data/.trash`, with a `.no-prune` kill switch, a per-run day
+  cap, per-day fingerprints recorded before deletion, and all gates re-evaluated at deletion time).
+  Reason: discarding clean data is the only irreversible operation in the project, and a bug in the
+  creation path must not be able to reach it. The fingerprints plus a mandatory re-download drill
+  convert "irreversible" into "verifiably reproducible from source".

@@ -162,9 +162,24 @@ Nothing in progress.
 
 ## Next up
 
-1. **P4-1: naive baseline (tanker over 15 years old under a flag of convenience)** is next in
-   `tasks.json`. Note the vessel-age open question below -- P4-1 cannot implement the baseline
-   literally as specified until it is resolved.
+**Full plan for both items below, already approved: `docs/PLAN_P4-0_P3-4.md`** (committed to the
+repo, so a fresh session can read it without depending on a local path). Read it before starting
+either -- it carries the exact file paths, function signatures and safety gates.
+
+1. **P4-0 (DO THIS FIRST): discriminative check with exposure-normalized features.** A go/no-go gate
+   before any modelling. An ad-hoc version of this check was already run this session and came back
+   NEGATIVE -- see the first open question below. P4-0 formalizes it: exposure columns
+   (`n_observed_hours`/`n_observed_days`, derived from `liveness.parquet`, which survives deleting
+   clean data), rate features alongside the existing counts, matched controls, and bootstrap
+   confidence intervals. **Decision point:** if no normalized feature discriminates with a CI
+   excluding no-effect, stop and rethink detectors or geographic coverage before doing P3-4.
+2. **P3-4 (after P4-0): per-window storage pipeline**, so windows sampled across 2022-2024 can be
+   processed with a disk peak of ~1 window instead of the sum of all. Partition `liveness` by day,
+   make every detector write per-window artifacts, add thinned tracks for the map, and split
+   creation (`pipeline/window.py`, never deletes) from deletion (`pipeline/prune.py`, opt-in,
+   quarantine-first). The re-download drill (A0.4 in the plan) is the gate that must pass before any
+   deletion is trusted.
+3. **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless.
 
 ## Blocked
 
@@ -172,6 +187,18 @@ Nothing in progress.
 
 ## Open questions
 
+- **THE BIG ONE: the detectors appear to measure local operating volume, not evasion.** An ad-hoc
+  discriminative check run 2026-09-22 directly against the real panel (verified by hand, not
+  delegated): among tankers with a valid imo, vessels sanctioned AFTER window_end show *less* signal
+  than those never sanctioned -- 0.43 vs 0.73 gaps per voyage, 0.0% vs 0.5% with any STS episode,
+  5.9% vs 32.0% with any spoofing event, median 2 vs 3 voyages. Median message count is nearly
+  identical (23,245 vs 22,459), so this is **not** a raw-exposure artifact. The only feature pointing
+  the expected way is `n_draught_change_unexplained` (40.7% vs 24.6% of tankers) -- which is
+  precisely the fingerprint of a transfer happening OUTSIDE Danish coverage. Working interpretation:
+  a resident Danish ferry accumulates more events than a transiting tanker simply by being in front
+  of the receiver longer, so raw counts encode presence, not risk. **This is what P4-0 exists to
+  confirm or refute with proper normalization and matched controls.** Do not train anything until
+  it is resolved.
 - **No vessel-age (build-year) data exists anywhere in this project's ingested data.** Confirmed
   against the real clean-partition schema while building `features/panel.py` (P3-3): the DMA AIS
   feed carries no build-year field, and nothing else ingested so far (sanctions lists, GFW) carries
@@ -266,4 +293,8 @@ spoofing, sts) is well under 200 MB total — the whole point of reducing to agg
 depth" requirement (several validation cutoffs `T`, each needing data before and after) should
 still be met by **sampling short windows around each cutoff**, not downloading every day, and
 eventually by discarding cleaned days too once Phase 2's detectors exist to define what's safe to
-reduce them to (deferred, see `docs/DECISIONS.md`).
+reduce them to. **That deferral is now lifted: the detectors all exist, and P3-4 is the task that
+implements the discard.** Measured reduction ratios that make it work: 30 days of clean data are
+14.2 GB, while `liveness.parquet` (all that `detect.gaps` needs) is 64 MB, all five detector outputs
+are 114 MB, and `anchorages.parquet` is 0.10 MB. `pipeline/manifest.py` already has the unused
+`clean_discarded_at` / "reduced" state stubbed and tested for exactly this.
