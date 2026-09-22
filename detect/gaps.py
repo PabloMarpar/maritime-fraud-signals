@@ -51,12 +51,13 @@ import duckdb
 
 from detect.liveness import (
     GRID_SIZE_DEG,
-    LIVENESS_PATH,
+    LIVENESS_ROOT,
     LivenessVerdict,
     cells_within,
     liveness_verdict,
 )
-from process.tracks import VOYAGES_PATH
+from process.partitions import partition_exists
+from process.tracks import VOYAGES_GLOB
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,7 @@ def candidate_gaps(
 def score_gap(
     con: duckdb.DuckDBPyConnection,
     gap: GapCandidate,
-    liveness_path: Path = LIVENESS_PATH,
+    liveness_path: Path = LIVENESS_ROOT,
     ring: int = 0,
     **verdict_kwargs,
 ) -> GapScore:
@@ -285,8 +286,8 @@ def _git_sha() -> str:
 def build_gap_scores(
     start: date,
     end: date,
-    voyages_path: Path = VOYAGES_PATH,
-    liveness_path: Path = LIVENESS_PATH,
+    voyages_path: Path = VOYAGES_GLOB,
+    liveness_path: Path = LIVENESS_ROOT,
     out_path: Path = GAPS_PATH,
     ring: int = 0,
     force: bool = False,
@@ -296,7 +297,8 @@ def build_gap_scores(
     Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
     either way. Raises FileNotFoundError if voyages_path or liveness_path don't exist, naming
     which one and what builds it (process.tracks.reconstruct_range / detect.liveness.build_liveness
-    respectively).
+    respectively). ``voyages_path`` defaults to a glob over every window process.tracks has built
+    (``process.tracks.VOYAGES_GLOB``, P3-4/A2).
 
     Opens exactly one DuckDB connection and reuses it across every candidate gap -- liveness_verdict
     is called once per gap, thousands of times per run, and must not pay to reconnect each time.
@@ -307,7 +309,7 @@ def build_gap_scores(
         )
         return out_path
 
-    if not voyages_path.exists():
+    if not partition_exists(voyages_path):
         raise FileNotFoundError(
             f"No voyages table at {voyages_path}; run process.tracks.reconstruct_range first"
         )
@@ -392,10 +394,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start", required=True, help="First day, YYYY-MM-DD")
     parser.add_argument("--end", help="Last day, YYYY-MM-DD (default: same as --start)")
     parser.add_argument(
-        "--voyages-path", default=str(VOYAGES_PATH), help="Path to the voyages table"
+        "--voyages-path",
+        default=str(VOYAGES_GLOB),
+        help="Path or glob for the voyages table(s)",
     )
     parser.add_argument(
-        "--liveness-path", default=str(LIVENESS_PATH), help="Path to the liveness table"
+        "--liveness-path",
+        default=str(LIVENESS_ROOT),
+        help="Path to the liveness table (directory of day-partitions, or a legacy whole-range file)",
     )
     parser.add_argument("--out-path", default=str(GAPS_PATH), help="Output path for the gap scores")
     parser.add_argument(
