@@ -835,3 +835,13 @@ _2026-09-22_ (P3-3 review-and-pause session)
   ready-to-resume fix list. Nothing from the fix pass is committed; `features/panel.py`'s docstring
   carries an explicit warning block (added this session) flagging that its prose describes the
   target end-state, not yet the real code, so a future reader isn't misled by the mismatch.
+- **P3-3's fix pass finished and the panel rebuilt.** All 8 items resumed and completed: the
+  `label_` prefix was actually applied to the five sanctions-derived SQL columns in
+  `features/panel.py` and `tests/test_panel.py` (previously only the docstring described this), a
+  new guard test (`test_label_columns_are_the_only_ones_naming_sanctions`) asserts the real panel's
+  output column set matches exactly, and the docstring's stale warning block describing the
+  interrupted state was removed. `data/processed/vessel_month_panel.parquet` was rebuilt with
+  `--force`; the real numbers are unchanged (21,146 rows, 4,881 with a valid imo, 16,265 orphaned, 1
+  reused, 164/17/147 sanctions split) -- confirming the fix pass only touched column names and
+  documentation, not the underlying computation. 346 tests pass (345 + the new guard test), `ruff`
+  clean. `tasks.json` marks P3-3 `done: true`.

@@ -280,7 +280,7 @@ def test_vessel_with_zero_detector_events_gets_zero_not_missing_row(tmp_path):
         "n_destination_course_mismatch",
         "n_draught_change_unexplained",
         "voyage_count",
-        "n_sanctions_sources",
+        "label_n_sanctions_sources",
     ):
         assert row[count_col] == 0, count_col
     for mean_col in (
@@ -290,10 +290,10 @@ def test_vessel_with_zero_detector_events_gets_zero_not_missing_row(tmp_path):
         "max_sts_confidence",
     ):
         assert row[mean_col] is None, mean_col
-    assert row["is_sanctioned_ever"] is False
-    assert row["is_sanctioned_as_of_window_end"] is False
-    assert row["is_sanctioned_after_window_end"] is False
-    assert row["earliest_designation_date"] is None
+    assert row["label_is_sanctioned_ever"] is False
+    assert row["label_is_sanctioned_as_of_window_end"] is False
+    assert row["label_is_sanctioned_after_window_end"] is False
+    assert row["label_earliest_designation_date"] is None
 
 
 def test_vessel_with_events_across_all_detectors_aggregates_correctly(tmp_path):
@@ -381,10 +381,10 @@ def test_orphaned_mmsi_has_no_imo_and_no_possible_sanctions_label(tmp_path):
     assert row["is_orphaned"] is True
     assert row["is_reused"] is False
     assert row["imo"] is None
-    assert row["is_sanctioned_ever"] is False
-    assert row["is_sanctioned_as_of_window_end"] is False
-    assert row["is_sanctioned_after_window_end"] is False
-    assert row["n_sanctions_sources"] == 0
+    assert row["label_is_sanctioned_ever"] is False
+    assert row["label_is_sanctioned_as_of_window_end"] is False
+    assert row["label_is_sanctioned_after_window_end"] is False
+    assert row["label_n_sanctions_sources"] == 0
 
 
 def test_reused_mmsi_picks_most_recently_seen_imo_as_representative(tmp_path):
@@ -433,25 +433,25 @@ def test_sanctions_label_three_way_split(tmp_path):
     rows = {row["mmsi"]: row for row in _read_panel(p.out_path)}
 
     never = rows[mmsi_never]
-    assert never["is_sanctioned_ever"] is False
-    assert never["is_sanctioned_as_of_window_end"] is False
-    assert never["is_sanctioned_after_window_end"] is False
-    assert never["earliest_designation_date"] is None
-    assert never["n_sanctions_sources"] == 0
+    assert never["label_is_sanctioned_ever"] is False
+    assert never["label_is_sanctioned_as_of_window_end"] is False
+    assert never["label_is_sanctioned_after_window_end"] is False
+    assert never["label_earliest_designation_date"] is None
+    assert never["label_n_sanctions_sources"] == 0
 
     before = rows[mmsi_before]
-    assert before["is_sanctioned_ever"] is True
-    assert before["is_sanctioned_as_of_window_end"] is True
-    assert before["is_sanctioned_after_window_end"] is False
-    assert before["earliest_designation_date"] == date(2024, 1, 1)
-    assert before["n_sanctions_sources"] == 1
+    assert before["label_is_sanctioned_ever"] is True
+    assert before["label_is_sanctioned_as_of_window_end"] is True
+    assert before["label_is_sanctioned_after_window_end"] is False
+    assert before["label_earliest_designation_date"] == date(2024, 1, 1)
+    assert before["label_n_sanctions_sources"] == 1
 
     after = rows[mmsi_after]
-    assert after["is_sanctioned_ever"] is True
-    assert after["is_sanctioned_as_of_window_end"] is False
-    assert after["is_sanctioned_after_window_end"] is True
-    assert after["earliest_designation_date"] == date(2024, 12, 1)  # earliest of the two sources
-    assert after["n_sanctions_sources"] == 2
+    assert after["label_is_sanctioned_ever"] is True
+    assert after["label_is_sanctioned_as_of_window_end"] is False
+    assert after["label_is_sanctioned_after_window_end"] is True
+    assert after["label_earliest_designation_date"] == date(2024, 12, 1)  # earliest of two sources
+    assert after["label_n_sanctions_sources"] == 2
 
 
 def test_knowable_at_filter_excludes_event_after_month_end(tmp_path):
@@ -595,6 +595,32 @@ def test_raises_when_a_detector_table_missing(tmp_path):
     # behaviour.parquet deliberately not written.
     with pytest.raises(FileNotFoundError):
         _run(p)
+
+
+def test_label_columns_are_the_only_ones_naming_sanctions(tmp_path):
+    """Guard against a future rename accidentally re-introducing an unprefixed label column into
+    the feature matrix: every sanctions-derived column must carry the `label_` prefix, and no
+    other column name may even mention "sanction"/"designat", or it would silently look like a
+    legitimate feature to a feature-selection step that only excludes `label_*`.
+    """
+    p = _Paths(tmp_path)
+    _build_minimal_inputs(
+        p,
+        mmsi_imo_rows=[
+            (219000017, VALID_IMO_A, 5, date(2024, 6, 1), date(2024, 6, 5), False, False)
+        ],
+    )
+
+    _run(p)
+    rows = _read_panel(p.out_path)
+    columns = set(rows[0].keys())
+
+    assert {c for c in columns if c.startswith("label_")} == set(panel.LABEL_COLUMNS)
+    non_label_columns = columns - set(panel.LABEL_COLUMNS)
+    for column in non_label_columns:
+        lowered = column.lower()
+        assert "sanction" not in lowered, column
+        assert "designat" not in lowered, column
 
 
 def test_raises_when_no_clean_partitions_in_range(tmp_path):

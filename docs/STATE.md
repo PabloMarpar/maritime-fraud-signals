@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-21_
+_Last updated: 2026-09-22_
 
 ## Done
 
@@ -117,75 +117,54 @@ _Last updated: 2026-09-21_
   `ruff` clean. See `docs/DECISIONS.md` for the full write-up and open questions below for why the
   headline number departs from the pre-registered near-zero expectation.
 
-- **P3-3 built but NOT closed -- real defects found by `analyst-review`, fix in progress, see "In
-  progress" below.** `features/panel.py` (uncommitted): one row per `(mmsi, year_month)`, DuckDB-
-  only, left-joins all five detector tables plus the sanctions match table onto the
-  `mmsi_imo.parquet` roster. 345 tests pass (15 new), `ruff` clean, real run over 2024-06 landed
-  `data/processed/vessel_month_panel.parquet` (21,146 rows, 4,881 with a valid imo, 16,265 orphaned,
-  1 reused). Labels: 164 ever matched a sanctions record, 17 already sanctioned by window_end, 147
-  sanctioned only after (the forward-looking population). **Do not trust the "detector totals
-  reproduce exactly" framing anywhere else in this file or in `docs/DECISIONS.md`'s pre-review P3-3
-  entry -- it is wrong for `sts` (see below).** Full detail in "In progress".
+- **P3-3 done.** `features/panel.py`: one row per `(mmsi, year_month)`, DuckDB-only, left-joins all
+  five detector tables plus the sanctions match table onto the `mmsi_imo.parquet` roster. 346 tests
+  pass (16 new), `ruff` clean, real run over 2024-06 landed `data/processed/vessel_month_panel.parquet`
+  (21,146 rows, 4,881 with a valid imo, 16,265 orphaned, 1 reused). Labels: 164 ever matched a
+  sanctions record, 17 already sanctioned by window_end, 147 sanctioned only after (the
+  forward-looking population). A first pass was flagged NOT safe for Phase 4 by `analyst-review`;
+  the fix pass (interrupted mid-session once, resumed and finished this session) covered all 8
+  items:
+  1. **Population restriction documented as a hard blocker**, not just a caveat: the module
+     docstring states plainly that 77.5% of panel rows (`is_orphaned=true`) can structurally never
+     be labelled positive (the sanctions join is by imo only) and that Phase 4's modelling
+     population MUST be restricted to `imo IS NOT NULL` rows, or a model trivially "solves" the
+     panel by re-deriving `is_orphaned`/`ship_type='Tanker'` instead of predicting anything.
+  2. **All five sanctions-derived columns renamed to a `label_` prefix**
+     (`label_is_sanctioned_ever`, `label_earliest_designation_date`,
+     `label_is_sanctioned_as_of_window_end`, `label_is_sanctioned_after_window_end`,
+     `label_n_sanctions_sources`), with a new guard test
+     (`test_label_columns_are_the_only_ones_naming_sanctions`) asserting the real panel's output
+     columns match that exact set and no other column name contains "sanction"/"designat".
+  3. **The false "sts reproduces exactly" claim** is corrected in `docs/DECISIONS.md`'s
+     `_2026-09-22_` entry (append-only, per that file's own convention -- the original wrong
+     paragraph is left in place with the correction appended after it, not rewritten).
+  4. **The P4-3 rolling-cutoff blocker list is now complete and accurate**, written directly into
+     `features/panel.py`'s own docstring (not just this file): `gaps` confirmed SAFE (0/74,546 real
+     gaps violate `gap_end <= window_end`); `sts` confirmed WORSE than originally stated (its
+     `_repetition` self-join has no temporal ordering -- 819/1,689 real episodes, 48.5%, have a
+     later episode inflating their own repetition score -- and `_context` reads up to 6h past
+     `end_time`, so filtering alone cannot fix it, the detector itself would need re-running per
+     cutoff); `spoofing`'s `synthetic_circle` is a CONFIRMED backdating (`event_time = voyage_start`,
+     93 real events), not merely plausible; and the single largest, previously-missing prerequisite
+     is now documented -- every STATIC identity feature (`total_message_count`, `voyage_count`,
+     `ship_type`, `is_reused`, and critically the representative `imo` used for the sanctions join)
+     is aggregated over the ENTIRE window with no month bound, which would leak a later month's
+     identity into an earlier month's row/label in a future multi-month panel.
+
+  Real panel numbers are unchanged by the fix pass (same 21,146/4,881/164/17/147 as the original
+  build) -- only column names and documentation changed. **P3-1 and P3-2 are unaffected, already
+  committed, and were never in question.**
 
 ## In progress
 
-- **P3-3 fix pass, interrupted mid-edit by a session rate limit -- resume this first.**
-  `analyst-review` reviewed the real (uncommitted) `features/panel.py` and found it is NOT safe to
-  hand to Phase 4 as-is, despite passing all tests. Four real blockers, none of them a live temporal
-  leak in the *current* single-month build, but each would corrupt Phase 4's results if left as-is:
-  1. **77.5% of panel rows (`is_orphaned=true`) can structurally never be labelled positive**
-     (sanctions only join by imo), and `is_orphaned` is itself a feature -- a naive model trained on
-     the whole panel would split on `is_orphaned` then `ship_type='Tanker'` and report a meaningless
-     ~0.97 AUC that is really just re-deriving the sanctioner's own selection criterion. Must be
-     documented as a hard modelling-population restriction (`imo IS NOT NULL` only) before P4.
-  2. **Sanctions-derived columns are not distinguishable from features by name** (`is_sanctioned_ever`
-     is an exact superset of the target; `earliest_designation_date` is the literal expression the
-     labels are derived from; `n_sanctions_sources` is 0 for every real negative by construction).
-     Fix: rename all five to a `label_` prefix and add a guard test asserting no other column name
-     contains "sanction"/"designat".
-  3. **`docs/STATE.md`/`docs/DECISIONS.md`'s original P3-3 write-up falsely claims sts reproduces
-     "exactly" (3,350 episode-sides).** Real raw count is 1,689 episodes = 3,378 episode-sides; the
-     panel's `<= month_end_ts` cutoff filter correctly excludes 14 episodes (28 sides) whose
-     `end_time` is `2024-07-01 00:00:00`, right-censored at the month boundary -- correct behaviour,
-     wrongly described as an exact match. Needs a text fix, not a code fix.
-  4. **The P4-3 (rolling-cutoff) blocker list is incomplete and understates/overstates individual
-     detector risk.** Checked against the real detector code, not assumed: `gaps`' `probability` is
-     actually SAFE (P2-1b's `liveness_verdict` already bounds its baseline strictly before the gap
-     via `as_of=gap_start`, confirmed 0/74,546 real gaps violate `gap_end <= window_end`) -- remove
-     it from the risk list. `sts`'s risk is WORSE than stated: its `_repetition` self-join has no
-     temporal ordering (49% of real episodes, 831/1,689, have their repetition count inflated by a
-     later episode) and `_context`'s departure features read up to `end_time + 6h` -- filtering by a
-     `knowable_at` column alone cannot fix this, the detector itself would need to be re-run per
-     cutoff. `spoofing`'s `synthetic_circle` check is a CONFIRMED backdating (`event_time =
-     voyage_start`, not voyage end; 93 real events), not a "plausible" one. Separately and more
-     importantly: every STATIC feature (`total_message_count`, `voyage_count`, `ship_type`,
-     `is_reused`, and critically the representative `imo` used for the sanctions join) is aggregated
-     over the ENTIRE window with no month bound at all -- in a future multi-month panel this would
-     leak a *later* month's identity (including which imo an mmsi resolves to) into an *earlier*
-     month's row and label. This is the single largest P4-3 prerequisite and was missing from the
-     original write-up entirely.
-
-  A fix agent was dispatched with all 8 fixes fully specified (the 4 above plus 4 cheaper
-  documentation-only corrections -- see the prompt already sent, recoverable via `SendMessage` to
-  agent `af073cdc70e4e8f87` if it's still alive) but was cut off by a session rate limit partway
-  through. **Real state of the uncommitted working tree right now:** `features/panel.py`'s
-  docstring was hand-edited to describe the *target* end-state (renamed `label_*` columns, a guard
-  test) but the actual SQL in the module and in `tests/test_panel.py` still uses the OLD unprefixed
-  names -- this mismatch is flagged in a loud warning block at the very top of the module's
-  docstring, added this session specifically so nobody mistakes the prose for the real code state.
-  Nothing from this fix pass is committed. Next session: re-run the fix (same 8 items, all already
-  fully specified) via a fresh `pipeline-dev` agent, or resume `af073cdc70e4e8f87` directly.
-  **P3-1 and P3-2 are unaffected, already committed, and not in question.**
+Nothing in progress.
 
 ## Next up
 
-1. **Finish the P3-3 fix pass** (above) before starting P4-1 -- do not build Phase 4 features on
-   top of a panel where labels and features aren't structurally separated and the population
-   restriction isn't documented, both of which are cheap to fix and expensive to discover after the
-   fact.
-2. **P4-1: naive baseline (tanker over 15 years old under a flag of convenience)** is next in
-   `tasks.json` after the fix pass. Note the vessel-age open question below -- P4-1 cannot implement
-   the baseline literally as specified until it is resolved.
+1. **P4-1: naive baseline (tanker over 15 years old under a flag of convenience)** is next in
+   `tasks.json`. Note the vessel-age open question below -- P4-1 cannot implement the baseline
+   literally as specified until it is resolved.
 
 ## Blocked
 

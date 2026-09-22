@@ -1,15 +1,4 @@
-"""**INCOMPLETE FIX PASS, 2026-09-22 -- READ BEFORE TRUSTING ANYTHING BELOW ABOUT ``label_``
-PREFIXES.** A post-analyst-review fix pass was interrupted mid-edit (session rate limit) after
-rewriting this docstring to describe the target end-state (five ``label_``-prefixed columns, a
-guard test) but BEFORE actually renaming the columns in the SQL below or in
-``tests/test_panel.py``. As of right now the real output columns are still ``is_sanctioned_ever``
-/ ``earliest_designation_date`` / ``is_sanctioned_as_of_window_end`` /
-``is_sanctioned_after_window_end`` / ``n_sanctions_sources`` (UNPREFIXED, no ``label_`` prefix),
-and no guard test exists yet. See ``docs/STATE.md``'s "In progress" section for the full list of
-fixes analyst-review found and which of them (if any) actually landed. Do not assume this
-docstring's prose matches the code until that note says otherwise.
-
-Aggregate every detector, the identity table and the sanctions join into one flat
+"""Aggregate every detector, the identity table and the sanctions join into one flat
 vessel-month feature/label panel -- the input Phase 4's models will train on.
 
 **Grain: one row per (mmsi, year_month).** ``year_month`` is a DATE truncated to the first of the
@@ -238,6 +227,17 @@ logger = logging.getLogger(__name__)
 CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
 PANEL_PATH = Path("data/processed/vessel_month_panel.parquet")
+
+# The panel's five sanctions-derived columns -- see module docstring's "Label columns are
+# structurally separated from features" section for why the prefix exists and why this exact set
+# is asserted against in tests/test_panel.py's guard test.
+LABEL_COLUMNS = (
+    "label_is_sanctioned_ever",
+    "label_earliest_designation_date",
+    "label_is_sanctioned_as_of_window_end",
+    "label_is_sanctioned_after_window_end",
+    "label_n_sanctions_sources",
+)
 
 # Arbitrary, documented threshold -- see module docstring's gaps bullet. Not empirically
 # calibrated; revisit once a labelled comparison exists.
@@ -539,11 +539,11 @@ _PANEL_SELECT_SQL = (
     "COALESCE(ia.n_identity_anomalies_total, 0) AS n_identity_anomalies_total, "
     "COALESCE(bh.n_destination_course_mismatch, 0) AS n_destination_course_mismatch, "
     "COALESCE(bh.n_draught_change_unexplained, 0) AS n_draught_change_unexplained, "
-    "COALESCE(sa.is_sanctioned_ever, false) AS is_sanctioned_ever, "
-    "sa.earliest_designation_date, "
-    "COALESCE(sa.earliest_designation_date <= ?, false) AS is_sanctioned_as_of_window_end, "
-    "COALESCE(sa.earliest_designation_date > ?, false) AS is_sanctioned_after_window_end, "
-    "COALESCE(sa.n_sanctions_sources, 0) AS n_sanctions_sources, "
+    "COALESCE(sa.is_sanctioned_ever, false) AS label_is_sanctioned_ever, "
+    "sa.earliest_designation_date AS label_earliest_designation_date, "
+    "COALESCE(sa.earliest_designation_date <= ?, false) AS label_is_sanctioned_as_of_window_end, "
+    "COALESCE(sa.earliest_designation_date > ?, false) AS label_is_sanctioned_after_window_end, "
+    "COALESCE(sa.n_sanctions_sources, 0) AS label_n_sanctions_sources, "
     "? AS window_start, ? AS window_end, {built_at_sql} AS built_at, ? AS git_sha "
     "FROM _panel_base pb "
     "JOIN _roster r ON r.mmsi = pb.mmsi "
@@ -658,9 +658,9 @@ def build_panel(
         (n_orphaned,) = con.execute("SELECT count(*) FROM _panel WHERE is_orphaned").fetchone()
         (n_reused,) = con.execute("SELECT count(*) FROM _panel WHERE is_reused").fetchone()
         (n_ever, n_as_of, n_after) = con.execute(
-            "SELECT count(*) FILTER (WHERE is_sanctioned_ever), "
-            "count(*) FILTER (WHERE is_sanctioned_as_of_window_end), "
-            "count(*) FILTER (WHERE is_sanctioned_after_window_end) FROM _panel"
+            "SELECT count(*) FILTER (WHERE label_is_sanctioned_ever), "
+            "count(*) FILTER (WHERE label_is_sanctioned_as_of_window_end), "
+            "count(*) FILTER (WHERE label_is_sanctioned_after_window_end) FROM _panel"
         ).fetchone()
         logger.info(
             "Built panel: %d row(s), %d distinct mmsi, %d with a valid imo, %d orphaned, "
