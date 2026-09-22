@@ -39,8 +39,9 @@ from pathlib import Path
 
 import duckdb
 
-from detect.sts import STS_PATH
+from detect.sts import STS_GLOB
 from ingest.gfw import GFW_ENCOUNTERS_PATH
+from process.partitions import partition_exists
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +178,7 @@ def _rate(n_matched: int, n_total: int) -> float:
 
 
 def build_agreement(
-    sts_path: Path = STS_PATH,
+    sts_path: Path = STS_GLOB,
     gfw_path: Path = GFW_ENCOUNTERS_PATH,
     out_path: Path = AGREEMENT_PATH,
     tolerance_minutes: float = MATCH_TOLERANCE_MINUTES,
@@ -189,7 +190,8 @@ def build_agreement(
     detect.sts event (matched_by_gfw bool, in_gfw_scope bool) -- GFW's own table, restricted to
     the same window/bbox, already exists standalone at gfw_path for the reverse direction. Logs
     the headline and scope-split agreement rates on both sides; see module docstring for why both
-    must be reported together.
+    must be reported together. ``sts_path`` defaults to a glob over every window detect.sts has
+    built (``detect.sts.STS_GLOB``, P3-4/A2).
     """
     if out_path.exists() and not force:
         logger.info(
@@ -197,7 +199,7 @@ def build_agreement(
         )
         return out_path
 
-    if not sts_path.exists():
+    if not partition_exists(sts_path):
         raise FileNotFoundError(f"No detect.sts output at {sts_path}; run detect.sts.build_sts_events first")
     if not gfw_path.exists():
         raise FileNotFoundError(
@@ -281,7 +283,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Measure agreement between detect.sts and the GFW Events API's encounters "
         "(P2-7)."
     )
-    parser.add_argument("--sts-path", default=str(STS_PATH), help="Path to detect.sts's output")
+    parser.add_argument(
+        "--sts-path", default=str(STS_GLOB), help="Path or glob for detect.sts's output"
+    )
     parser.add_argument(
         "--gfw-path", default=str(GFW_ENCOUNTERS_PATH), help="Path to ingest.gfw's output"
     )

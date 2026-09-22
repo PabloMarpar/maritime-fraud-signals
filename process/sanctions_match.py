@@ -84,7 +84,8 @@ from pathlib import Path
 import duckdb
 
 from ingest.sanctions import SANCTIONS_PATH
-from process.identity import IDENTITY_PATH, VALID_IMO_SQL
+from process.identity import IDENTITY_GLOB, VALID_IMO_SQL
+from process.partitions import partition_exists
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +131,20 @@ def _build(con: duckdb.DuckDBPyConnection, sanctions_path: Path, identity_path: 
 
     # mmsi_imo.parquet is already checksum-valid by construction (process.identity only ever
     # writes a pair for a valid imo); orphan sentinel rows (imo IS NULL) never join.
+    #
+    # GROUP BY (mmsi, imo), not a plain SELECT: identity_path defaults to a glob over every
+    # window process.identity has built (P3-4/A2), and the same (mmsi, imo) pair legitimately
+    # recurs across windows for a vessel active in more than one. Without this aggregation, the
+    # later JOIN would emit one row per (sanctions record x window occurrence) instead of per
+    # (sanctions record x mmsi), silently multiplying match counts once a second window exists --
+    # not yet observable against today's single-window real data, but a real bug the glob default
+    # would otherwise introduce silently.
     con.execute(
         "CREATE OR REPLACE VIEW identity_valid AS "
-        "SELECT mmsi, imo, message_count, first_seen, last_seen, is_reused "
-        f"FROM read_parquet('{identity_path.as_posix()}') WHERE imo IS NOT NULL"
+        "SELECT mmsi, imo, sum(message_count) AS message_count, "
+        "min(first_seen) AS first_seen, max(last_seen) AS last_seen, bool_or(is_reused) AS is_reused "
+        f"FROM read_parquet('{identity_path.as_posix()}') WHERE imo IS NOT NULL "
+        "GROUP BY mmsi, imo"
     )
 
     con.execute(
@@ -150,7 +161,7 @@ def _build(con: duckdb.DuckDBPyConnection, sanctions_path: Path, identity_path: 
 
 def match_sanctions(
     sanctions_path: Path = SANCTIONS_PATH,
-    identity_path: Path = IDENTITY_PATH,
+    identity_path: Path = IDENTITY_GLOB,
     out_path: Path = MATCHES_PATH,
     force: bool = False,
 ) -> Path:
@@ -160,6 +171,8 @@ def match_sanctions(
     either way. Raises FileNotFoundError naming what builds each missing input -- no sanctions
     table: ingest.sanctions.build_sanctions; no identity table: process.identity.resolve_range.
     Logs the match-rate and ambiguity summary described in the module docstring.
+    ``identity_path`` defaults to a glob over every window process.identity has built
+    (``process.identity.IDENTITY_GLOB``, P3-4/A2).
     """
     if out_path.exists() and not force:
         logger.info(
@@ -171,7 +184,7 @@ def match_sanctions(
         raise FileNotFoundError(
             f"No sanctions table at {sanctions_path}; run ingest.sanctions.build_sanctions first"
         )
-    if not identity_path.exists():
+    if not partition_exists(identity_path):
         raise FileNotFoundError(
             f"No identity table at {identity_path}; run process.identity.resolve_range first"
         )
@@ -273,7 +286,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sanctions-path", default=str(SANCTIONS_PATH), help="Path to the combined sanctions table"
     )
     parser.add_argument(
-        "--identity-path", default=str(IDENTITY_PATH), help="Path to the mmsi<->imo identity table"
+        "--identity-path",
+        default=str(IDENTITY_GLOB),
+        help="Path or glob for the mmsi<->imo identity table(s)",
     )
     parser.add_argument("--out-path", default=str(MATCHES_PATH), help="Output path for the matches table")
     parser.add_argument(
