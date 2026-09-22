@@ -11,6 +11,7 @@ import duckdb
 import pytest
 
 from detect import liveness
+from process.partitions import partition_path
 
 DAY = date(2024, 6, 5)
 DAY2 = date(2024, 6, 6)
@@ -45,14 +46,43 @@ def _write_clean_partition(root: Path, day: date, rows: list[tuple]) -> None:
         con.close()
 
 
-def _read_presence(out_path: Path) -> list[tuple]:
+def _read_presence(day_path: Path) -> list[tuple]:
     con = duckdb.connect()
     try:
         return con.execute(
             "SELECT cell_lat, cell_lon, cell_hour, mmsi, is_class_a, n_messages, "
             "first_seen, last_seen "
-            f"FROM '{out_path.as_posix()}' ORDER BY cell_lat, cell_lon, cell_hour, mmsi"
+            f"FROM '{day_path.as_posix()}' ORDER BY cell_lat, cell_lon, cell_hour, mmsi"
         ).fetchall()
+    finally:
+        con.close()
+
+
+def _write_legacy_liveness_file(
+    path: Path, rows: list[tuple], window_start: date, window_end: date
+) -> None:
+    """Write a single whole-range liveness file, the shape build_liveness produced before P3-4.
+
+    rows: (cell_lat, cell_lon, cell_hour, mmsi, is_class_a, n_messages, first_seen, last_seen).
+    Exercises liveness_verdict's legacy file-mode branch directly, since build_liveness itself no
+    longer writes this shape (see module docstring).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    try:
+        con.execute(
+            "CREATE TABLE presence (cell_lat DOUBLE, cell_lon DOUBLE, cell_hour TIMESTAMP, "
+            "mmsi BIGINT, is_class_a BOOLEAN, n_messages INTEGER, first_seen TIMESTAMP, "
+            "last_seen TIMESTAMP)"
+        )
+        con.executemany("INSERT INTO presence VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        con.execute(
+            "COPY (SELECT *, "
+            f"DATE '{window_start.isoformat()}' AS window_start, "
+            f"DATE '{window_end.isoformat()}' AS window_end, "
+            "TIMESTAMP '2026-01-01 00:00:00' AS built_at, 'deadbeef' AS git_sha "
+            f"FROM presence) TO '{path.as_posix()}' (FORMAT PARQUET)"
+        )
     finally:
         con.close()
 
@@ -66,11 +96,11 @@ def test_base_station_and_aton_excluded_from_liveness(tmp_path):
         (219000004, _ts(0), 55.08, 12.08, "SAR Airborne"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    result = _read_presence(out_path)
+    result = _read_presence(partition_path(DAY, out_root))
     assert [row[3] for row in result] == [219000001]
 
 
@@ -78,11 +108,11 @@ def test_presence_is_one_row_per_cell_hour_mmsi(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(219000005, _ts(0, minute=m), 55.05, 12.05, "Class A") for m in range(0, 50, 5)]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    result = _read_presence(out_path)
+    result = _read_presence(partition_path(DAY, out_root))
     assert len(result) == 1
     row = result[0]
     assert row[5] == 10  # n_messages
@@ -97,11 +127,11 @@ def test_vessel_crossing_cell_boundary_gets_two_rows(tmp_path):
         (219000006, _ts(0, 10), 56.05, 13.05, "Class A"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    result = _read_presence(out_path)
+    result = _read_presence(partition_path(DAY, out_root))
     cells = {(row[0], row[1]) for row in result}
     assert cells == {(55.0, 12.0), (56.0, 13.0)}
 
@@ -113,11 +143,11 @@ def test_vessel_spanning_hour_boundary_gets_two_rows(tmp_path):
         (219000007, _ts(1, 5), 55.06, 12.06, "Class A"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
-    result = _read_presence(out_path)
+    result = _read_presence(partition_path(DAY, out_root))
     hours = {row[2] for row in result}
     assert hours == {_ts(0), _ts(1)}
 
@@ -127,8 +157,8 @@ def test_leave_one_out_excludes_own_messages(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(111, _ts(10), 55.05, 12.05, "Class A")]
     _write_clean_partition(in_root, DAY, rows)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -138,7 +168,7 @@ def test_leave_one_out_excludes_own_messages(tmp_path):
             window_start=_ts(9),
             window_end=_ts(11),
             exclude_mmsi=111,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -163,8 +193,8 @@ def test_area_dark_baseline_also_excludes_self(tmp_path):
         *[(444, PREV_BASE + timedelta(hours=h), 56.05, 13.05, "Class A") for h in range(16, 24)],
     ]
     _write_clean_partition(in_root, PREV_DAY, rows_prev)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -174,7 +204,7 @@ def test_area_dark_baseline_also_excludes_self(tmp_path):
             window_start=_ts(9),
             window_end=_ts(12),
             exclude_mmsi=111,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
         multi_vessel_baseline = liveness.liveness_verdict(
@@ -183,7 +213,7 @@ def test_area_dark_baseline_also_excludes_self(tmp_path):
             window_start=_ts(9),
             window_end=_ts(12),
             exclude_mmsi=999,  # never present -- excludes nobody real
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -207,8 +237,8 @@ def test_single_recurring_vessel_does_not_trigger_area_dark(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows_prev = [(555, PREV_BASE + timedelta(hours=h), 55.05, 12.05, "Class A") for h in range(24)]
     _write_clean_partition(in_root, PREV_DAY, rows_prev)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -218,7 +248,7 @@ def test_single_recurring_vessel_does_not_trigger_area_dark(tmp_path):
             window_start=_ts(9),
             window_end=_ts(12),
             exclude_mmsi=999,  # not the recurring vessel -- its history remains in the baseline
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -232,8 +262,8 @@ def test_receiver_alive_when_another_vessel_heard(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(222, _ts(10), 55.05, 12.05, "Class A")]
     _write_clean_partition(in_root, DAY, rows)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -243,7 +273,7 @@ def test_receiver_alive_when_another_vessel_heard(tmp_path):
             window_start=_ts(9),
             window_end=_ts(11),
             exclude_mmsi=111,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -257,8 +287,8 @@ def test_no_evidence_when_cell_never_occupied(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(222, _ts(10), 55.05, 12.05, "Class A")]
     _write_clean_partition(in_root, DAY, rows)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -268,7 +298,7 @@ def test_no_evidence_when_cell_never_occupied(tmp_path):
             window_start=_ts(9),
             window_end=_ts(11),
             exclude_mmsi=999,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -286,8 +316,8 @@ def test_partial_hour_overlap_not_counted(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     rows = [(222, _ts(0, 0), 55.05, 12.05, "Class A"), (222, _ts(0, 3), 55.05, 12.05, "Class A")]
     _write_clean_partition(in_root, DAY, rows)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -297,7 +327,7 @@ def test_partial_hour_overlap_not_counted(tmp_path):
             window_start=_ts(0, 30),
             window_end=_ts(0, 59),
             exclude_mmsi=111,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -316,8 +346,8 @@ def test_baseline_ignores_hours_at_or_after_as_of(tmp_path):
     rows_same_day = [(222, _ts(20), 55.05, 12.05, "Class A")]
     _write_clean_partition(in_root, PREV_DAY, rows_prev)
     _write_clean_partition(in_root, DAY, rows_same_day)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -327,7 +357,7 @@ def test_baseline_ignores_hours_at_or_after_as_of(tmp_path):
             window_start=_ts(9),
             window_end=_ts(11),
             exclude_mmsi=111,
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -343,8 +373,8 @@ def test_baseline_ignores_hours_at_or_after_as_of(tmp_path):
 def test_liveness_verdict_rejects_as_of_after_window_start(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(222, _ts(10), 55.05, 12.05, "Class A")])
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -355,7 +385,7 @@ def test_liveness_verdict_rejects_as_of_after_window_start(tmp_path):
                 window_start=_ts(9),
                 window_end=_ts(11),
                 exclude_mmsi=111,
-                liveness_path=liveness_path,
+                liveness_path=out_root,
                 as_of=DAY2,
             )
     finally:
@@ -365,8 +395,8 @@ def test_liveness_verdict_rejects_as_of_after_window_start(tmp_path):
 def test_liveness_verdict_rejects_tz_aware_datetime(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(222, _ts(10), 55.05, 12.05, "Class A")])
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -377,7 +407,7 @@ def test_liveness_verdict_rejects_tz_aware_datetime(tmp_path):
                 window_start=_ts(9).replace(tzinfo=timezone.utc),
                 window_end=_ts(11),
                 exclude_mmsi=111,
-                liveness_path=liveness_path,
+                liveness_path=out_root,
                 as_of=DAY,
             )
     finally:
@@ -394,8 +424,8 @@ def test_exclude_mmsi_accepts_a_sequence(tmp_path):
         (222, _ts(10, minute=30), 55.05, 12.05, "Class A"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=liveness_path)
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     con = duckdb.connect()
     try:
@@ -405,7 +435,7 @@ def test_exclude_mmsi_accepts_a_sequence(tmp_path):
             window_start=_ts(9),
             window_end=_ts(12),
             exclude_mmsi=[111, 222],
-            liveness_path=liveness_path,
+            liveness_path=out_root,
             as_of=DAY,
         )
     finally:
@@ -459,9 +489,9 @@ def test_grid_cell_values_match_coverage_module(tmp_path):
         con.close()
 
     cov_path = tmp_path / "coverage" / "grid.parquet"
-    live_path = tmp_path / "coverage" / "liveness.parquet"
+    live_root = tmp_path / "coverage" / "liveness"
     coverage.build_coverage_map(DAY, DAY, in_root=in_root, out_path=cov_path, min_pairs=1)
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=live_path)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=live_root)
 
     con = duckdb.connect()
     try:
@@ -469,7 +499,10 @@ def test_grid_cell_values_match_coverage_module(tmp_path):
             con.execute(f"SELECT DISTINCT cell_lat, cell_lon FROM '{cov_path.as_posix()}'").fetchall()
         )
         live_cells = set(
-            con.execute(f"SELECT DISTINCT cell_lat, cell_lon FROM '{live_path.as_posix()}'").fetchall()
+            con.execute(
+                "SELECT DISTINCT cell_lat, cell_lon FROM "
+                f"'{partition_path(DAY, live_root).as_posix()}'"
+            ).fetchall()
         )
     finally:
         con.close()
@@ -480,47 +513,67 @@ def test_grid_cell_values_match_coverage_module(tmp_path):
 def test_liveness_is_idempotent_by_default(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000010, _ts(0), 55.05, 12.05, "Class A")])
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    first = liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
-    first_mtime = first.stat().st_mtime_ns
+    first = liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
+    first_mtime = partition_path(DAY, out_root).stat().st_mtime_ns
 
-    second = liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+    second = liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
     assert second == first
-    assert second.stat().st_mtime_ns == first_mtime, "re-running without --force must not rewrite the file"
+    assert partition_path(DAY, out_root).stat().st_mtime_ns == first_mtime, (
+        "re-running without --force must not rewrite the day's partition"
+    )
+
+
+def test_liveness_only_rebuilds_missing_days(tmp_path):
+    """Extending an existing build's range must not touch a day already on disk."""
+    in_root = tmp_path / "clean" / "ais_dk"
+    _write_clean_partition(in_root, DAY, [(219000013, _ts(0), 55.05, 12.05, "Class A")])
+    _write_clean_partition(in_root, DAY2, [(219000014, _ts(0), 55.05, 12.05, "Class A")])
+    out_root = tmp_path / "coverage" / "liveness"
+
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
+    day_mtime = partition_path(DAY, out_root).stat().st_mtime_ns
+
+    result = liveness.build_liveness(DAY, DAY2, in_root=in_root, out_root=out_root)
+
+    assert partition_path(DAY, out_root).stat().st_mtime_ns == day_mtime
+    assert partition_path(DAY2, out_root).exists()
+    assert set(result) == {partition_path(DAY, out_root), partition_path(DAY2, out_root)}
 
 
 def test_liveness_force_rebuilds(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000011, _ts(0), 55.05, 12.05, "Class A")])
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
-    liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
-    result = liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path, force=True)
+    liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
+    result = liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root, force=True)
 
-    assert result.exists()
+    assert result[0].exists()
 
 
 def test_liveness_skips_missing_day_with_warning(tmp_path, caplog):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000012, _ts(0), 55.05, 12.05, "Class A")])
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
     with caplog.at_level("WARNING"):
-        liveness.build_liveness(DAY, DAY2, in_root=in_root, out_path=out_path)
+        liveness.build_liveness(DAY, DAY2, in_root=in_root, out_root=out_root)
 
     assert any("2024-06-06" in record.message for record in caplog.records)
-    result = _read_presence(out_path)
+    result = _read_presence(partition_path(DAY, out_root))
     assert len(result) == 1
+    assert not partition_path(DAY2, out_root).exists()
 
 
 def test_liveness_raises_when_no_partitions_exist(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    out_root = tmp_path / "coverage" / "liveness"
 
     with pytest.raises(FileNotFoundError):
-        liveness.build_liveness(DAY, DAY, in_root=in_root, out_path=out_path)
+        liveness.build_liveness(DAY, DAY, in_root=in_root, out_root=out_root)
 
 
 def test_liveness_verdict_raises_when_table_missing(tmp_path):
@@ -533,7 +586,7 @@ def test_liveness_verdict_raises_when_table_missing(tmp_path):
                 window_start=_ts(9),
                 window_end=_ts(11),
                 exclude_mmsi=111,
-                liveness_path=tmp_path / "coverage" / "liveness.parquet",
+                liveness_path=tmp_path / "coverage" / "liveness",
                 as_of=DAY,
             )
     finally:
@@ -543,24 +596,167 @@ def test_liveness_verdict_raises_when_table_missing(tmp_path):
 def test_liveness_provenance_columns_populated(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(in_root, DAY, [(219000016, _ts(0), 55.05, 12.05, "Class A")])
-    out_path = tmp_path / "coverage" / "liveness.parquet"
+    _write_clean_partition(in_root, DAY2, [(219000017, _ts(0), 55.05, 12.05, "Class A")])
+    out_root = tmp_path / "coverage" / "liveness"
 
     before = datetime.now(timezone.utc)
-    liveness.build_liveness(DAY, DAY2, in_root=in_root, out_path=out_path)
+    liveness.build_liveness(DAY, DAY2, in_root=in_root, out_root=out_root)
     after = datetime.now(timezone.utc)
 
     con = duckdb.connect()
     try:
-        row = con.execute(
-            "SELECT DISTINCT window_start, window_end, built_at, git_sha "
-            f"FROM '{out_path.as_posix()}'"
-        ).fetchall()
+        for day in (DAY, DAY2):
+            row = con.execute(
+                "SELECT DISTINCT window_start, window_end, built_at, git_sha "
+                f"FROM '{partition_path(day, out_root).as_posix()}'"
+            ).fetchall()
+            assert len(row) == 1, "provenance columns must be constant across a day's own rows"
+            window_start, window_end, built_at, git_sha = row[0]
+            # Each day is its own window_start == window_end -- one partition per day, see
+            # module docstring: there is no cross-day range recorded per partition any more.
+            assert window_start == day
+            assert window_end == day
+            assert before.replace(tzinfo=None) <= built_at <= after.replace(tzinfo=None)
+            assert isinstance(git_sha, str) and git_sha != ""
     finally:
         con.close()
 
-    assert len(row) == 1, "provenance columns must be constant across every row of one build"
-    window_start, window_end, built_at, git_sha = row[0]
-    assert window_start == DAY
-    assert window_end == DAY2
-    assert before.replace(tzinfo=None) <= built_at <= after.replace(tzinfo=None)
-    assert isinstance(git_sha, str) and git_sha != ""
+
+# --- A1.1: the denominator fix -------------------------------------------------------------
+
+
+def test_baseline_denominator_is_exact_day_count_not_span(tmp_path):
+    """Two disjoint 3-day islands inside the baseline window must give
+    baseline_hours_available == 24 * 6 = 144.0, never the naive 10-day span the old file-mode
+    arithmetic would have computed. This is A1.1's fix -- see module docstring.
+    """
+    in_root = tmp_path / "clean" / "ais_dk"
+    as_of_date = date(2024, 6, 20)
+    # Baseline window (baseline_days=10) is [as_of_date - 10, as_of_date) = [06-10, 06-20).
+    island_a = [date(2024, 6, 10) + timedelta(days=i) for i in range(3)]  # 06-10, 11, 12
+    island_b = [date(2024, 6, 16) + timedelta(days=i) for i in range(3)]  # 06-16, 17, 18
+    # A day left deliberately unbuilt inside the baseline window (06-13..06-15, and 06-19) --
+    # the gap that would have inflated the old span-based denominator.
+    for day in island_a + island_b:
+        _write_clean_partition(
+            in_root,
+            day,
+            [(700, datetime(day.year, day.month, day.day, 5), 55.05, 12.05, "Class A")],  # noqa: DTZ001
+        )
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(min(island_a), max(island_b), in_root=in_root, out_root=out_root)
+
+    con = duckdb.connect()
+    try:
+        verdict = liveness.liveness_verdict(
+            con,
+            cells=[(55.0, 12.0)],
+            window_start=datetime(2024, 6, 20, 9),  # noqa: DTZ001
+            window_end=datetime(2024, 6, 20, 11),  # noqa: DTZ001
+            exclude_mmsi=999,
+            liveness_path=out_root,
+            as_of=as_of_date,
+            baseline_days=10,
+        )
+    finally:
+        con.close()
+
+    assert verdict.baseline_hours_available == 144.0
+
+
+def test_partition_outside_range_does_not_alter_verdict(tmp_path):
+    """A day-partition on disk far outside [baseline_start, window_end] must be invisible to the
+    verdict -- pruning it later (P3-4's prune.py) must never change a past verdict's inputs."""
+    in_root = tmp_path / "clean" / "ais_dk"
+    far_past = date(2023, 1, 1)
+    _write_clean_partition(
+        in_root, far_past, [(800, datetime(2023, 1, 1, 5), 55.05, 12.05, "Class A")]  # noqa: DTZ001
+    )
+    _write_clean_partition(in_root, PREV_DAY, [(222, PREV_BASE + timedelta(hours=5), 55.05, 12.05, "Class A")])
+    out_root = tmp_path / "coverage" / "liveness"
+    liveness.build_liveness(far_past, far_past, in_root=in_root, out_root=out_root)
+    liveness.build_liveness(PREV_DAY, DAY, in_root=in_root, out_root=out_root)
+
+    con = duckdb.connect()
+    try:
+        verdict = liveness.liveness_verdict(
+            con,
+            cells=[(55.0, 12.0)],
+            window_start=_ts(9),
+            window_end=_ts(11),
+            exclude_mmsi=999,
+            liveness_path=out_root,
+            as_of=DAY,
+            baseline_days=30,
+        )
+    finally:
+        con.close()
+
+    # Only PREV_DAY falls inside the 30-day baseline window; far_past (2023-01-01) must not
+    # contribute vessel-hours or count toward baseline_hours_available.
+    assert verdict.baseline_vessel_hours == 1
+    assert verdict.baseline_hours_available == 24.0
+
+
+def test_liveness_verdict_directory_with_no_partitions_in_range_is_no_evidence(tmp_path):
+    """An existing but empty liveness directory (or one whose partitions all fall outside the
+    requested range) must resolve to no_evidence, not raise or divide by zero."""
+    out_root = tmp_path / "coverage" / "liveness"
+    out_root.mkdir(parents=True)
+
+    con = duckdb.connect()
+    try:
+        verdict = liveness.liveness_verdict(
+            con,
+            cells=[(55.0, 12.0)],
+            window_start=_ts(9),
+            window_end=_ts(11),
+            exclude_mmsi=999,
+            liveness_path=out_root,
+            as_of=DAY,
+        )
+    finally:
+        con.close()
+
+    assert verdict.verdict == "no_evidence"
+    assert verdict.baseline_hours_available == 0.0
+    assert verdict.n_corroborators == 0
+
+
+# --- Legacy single-file mode, still supported ----------------------------------------------
+
+
+def test_liveness_verdict_legacy_file_mode_still_works(tmp_path):
+    """A hand-built single whole-range file (the pre-P3-4 build_liveness shape) must still be
+    readable by liveness_verdict, using the old span-based denominator -- see module docstring.
+    """
+    legacy_path = tmp_path / "coverage" / "liveness.parquet"
+    _write_legacy_liveness_file(
+        legacy_path,
+        rows=[
+            (55.0, 12.0, _ts(10), 222, True, 1, _ts(10), _ts(10)),
+            (55.0, 12.0, PREV_BASE + timedelta(hours=5), 333, True, 1,
+             PREV_BASE + timedelta(hours=5), PREV_BASE + timedelta(hours=5)),
+        ],
+        window_start=PREV_DAY,
+        window_end=DAY,
+    )
+
+    con = duckdb.connect()
+    try:
+        verdict = liveness.liveness_verdict(
+            con,
+            cells=[(55.0, 12.0)],
+            window_start=_ts(9),
+            window_end=_ts(11),
+            exclude_mmsi=111,
+            liveness_path=legacy_path,
+            as_of=DAY,
+        )
+    finally:
+        con.close()
+
+    assert verdict.verdict == "receiver_alive"
+    assert verdict.n_corroborators == 1
+    assert verdict.baseline_vessel_hours == 1
+    assert verdict.baseline_hours_available == 24.0

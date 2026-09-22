@@ -938,3 +938,48 @@ _2026-09-22_ (P4-0 executed: the discriminative check)
   Fixed by threading `n_bootstrap` through `_evaluate_feature` explicitly. The real 2026-09-22 GO
   result above was computed before AND after this fix with identical numbers (both runs used the
   same effective bootstrap count), so it is not affected.
+
+_2026-09-22_
+
+- **P3-4/A1 done: `detect.liveness` is now accumulable by day.** `build_liveness` writes one
+  partition per day (`data/coverage/liveness/date=YYYY-MM-DD/part-0.parquet`, atomic temp-file +
+  `os.replace`), skipping days already built unless `force=True`, so a later window's build never
+  overwrites an earlier one. `liveness_verdict` now accepts either that directory (new default) or
+  a single legacy whole-range file (still fully supported, `liveness_path.is_file()` branch) --
+  see `_liveness_sources`. **A1.1's denominator fix**: directory mode computes
+  `baseline_hours_available` as `24 * (exact number of baseline days present on disk)`, never the
+  old span-based arithmetic (`max(window_end) - min(window_start)` from a file's own provenance),
+  which silently overcounts under disjoint coverage and biases verdicts toward `no_evidence` --
+  legacy file mode keeps the old arithmetic unchanged, since it is exact for a genuinely
+  contiguous single build. Real migration: rebuilt `data/coverage/liveness/` partitioned over the
+  full 2024-06-01..2024-06-30 window while the legacy `liveness.parquet` still existed side by
+  side -- both hold exactly 3,988,982 rows. **Equivalence check passed exactly, row for row**:
+  re-ran `detect.gaps.build_gap_scores` over the identical real window (2024-06-01..2024-07-01,
+  the same exclusive end the original real run used) against the new partitioned liveness --
+  74,546 candidate gaps, identical verdict breakdown (`receiver_alive` 72,631 / `no_evidence`
+  1,311 / `area_dark` 604), and a row-level `EXCEPT` diff against the existing real `gaps.parquet`
+  on `(mmsi, gap_start, gap_end, verdict, probability, n_corroborators, expected_corroborators,
+  n_baseline_vessels)` found zero rows different in either direction. Expected, since this window
+  is contiguous (A1.1's fix only changes behaviour under disjoint coverage) -- confirms the
+  rewrite is a correctness-preserving refactor on real data, not just on synthetic tests.
+- **A real performance bug found and fixed before the equivalence check could finish: a naive
+  per-call directory scan made directory-mode `liveness_verdict` far too slow to use.** The first
+  implementation resolved `_liveness_sources` with one `Path.exists()` stat per candidate day in
+  range, called fresh on every `liveness_verdict` invocation. `detect.gaps` calls this once per
+  candidate gap -- 74,546 times on the real window, each pulling in a ~30-40 day baseline range --
+  so this was 2-3 million individual filesystem stats. Measured: did not finish rebuilding the
+  real 30-day gap-score table in over 10 minutes (twice, including one run with `--out-path`
+  isolated to rule out a write-contention explanation) before being killed. Fixed by
+  `_list_liveness_days`, an `lru_cache`d one-time `glob("date=*")` per directory, replacing the
+  per-day stat loop with a single directory listing reused for the rest of the process. Benchmarked
+  on a real 200-gap subset before trusting it at full scale: directory mode with the cache is
+  0.017s/gap (~21 min projected for all 74,546), actually ~3x FASTER than the legacy single-file
+  mode's 0.056s/gap (~69 min projected) -- not merely "fixed", better than before. Not caught by
+  the unit tests (all synthetic fixtures are far too small, a handful of days, to expose an O(days
+  x calls) cost) -- a reminder that a real-scale timing run is a load-bearing verification step
+  here, not optional, same lesson `detect.spoofing`/`detect.sts`/`detect.identity_anomalies` each
+  already learned the hard way (see their own entries above).
+- **Scope note: A1 only.** P3-4's remaining parts (A2 per-window artifacts for every detector plus
+  a ship_type reference table, A3 thinned tracks, A4 `pipeline/window.py` orchestration, A5
+  `pipeline/prune.py` deletion with quarantine, and the A0.4 re-download drill) are not started.
+  `docs/PLAN_P4-0_P3-4.md`'s Part A spec still governs; nothing here reopens A1's design.

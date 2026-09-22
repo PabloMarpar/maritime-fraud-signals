@@ -89,28 +89,52 @@ assume the same default travels.
 
 All of this runs as DuckDB SQL over views and a small parameterised query; the data is never
 pulled into Python row by row, except the handful of scalars in a verdict.
+
+**Accumulable by day (P3-4/A1).** ``build_liveness`` writes one partition per day
+(``LIVENESS_ROOT/date=YYYY-MM-DD/part-0.parquet``), skipping days already built unless
+``force=True`` -- so a later window's build never overwrites an earlier one, and a caller can grow
+coverage incrementally instead of re-running a whole range each time. ``liveness_verdict`` accepts
+either a directory of day-partitions (the default, ``LIVENESS_ROOT``) or a single legacy whole-range
+file (``LIVENESS_PATH``, still fully supported for callers holding one from before this change) --
+see :func:`_liveness_sources`. **The baseline denominator is computed differently in each mode, and
+this matters.** In directory mode, ``baseline_hours_available`` is ``24 * (number of baseline days
+actually present on disk)`` -- exact, because day-partitions are disjoint and each one's coverage is
+unambiguous. In legacy file mode it falls back to overlapping the baseline window against the
+file's own ``window_start``/``window_end`` provenance, which is only exact for a single contiguous
+build; with disjoint ranges appended into one file (not possible via ``build_liveness`` since P3-4,
+but a hazard for anything that read the old file's semantics) that arithmetic silently overcounts
+the denominator, which *under*values ``expected_corroborators`` and biases verdicts toward
+``no_evidence``. This was a real, silent miscalibration risk before P3-4 and is why directory mode
+does not reuse that arithmetic at all.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 import duckdb
 
-from process.partitions import existing_partitions
+from process.partitions import daterange, existing_partitions, partition_path
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 COVERAGE_ROOT = Path("data/coverage")
+# Legacy single-file artifact (a whole range in one Parquet file). Still readable by
+# liveness_verdict -- see its docstring -- but build_liveness no longer writes it; new builds
+# always land per day under LIVENESS_ROOT (see P3-4/A1, docs/PLAN_P4-0_P3-4.md).
 LIVENESS_PATH = COVERAGE_ROOT / "liveness.parquet"
+# data/coverage/liveness/date=YYYY-MM-DD/part-0.parquet, one file per day -- see build_liveness.
+LIVENESS_ROOT = COVERAGE_ROOT / "liveness"
 
 GRID_SIZE_DEG = 0.1
 # Excludes fixed Base Station and AtoN beacons, and SAR Airborne units, which would otherwise
@@ -191,64 +215,76 @@ def build_liveness(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    out_path: Path = LIVENESS_PATH,
+    out_root: Path = LIVENESS_ROOT,
     grid_size_deg: float = GRID_SIZE_DEG,
     mobile_types: tuple[str, ...] = MOBILE_TYPES,
     force: bool = False,
-) -> Path:
-    """Build the cell-hour vessel-presence table for every clean partition in [start, end].
+) -> list[Path]:
+    """Build the cell-hour vessel-presence table, one partition per day, for every day in
+    [start, end] that has a clean partition.
 
-    Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError if no clean partition exists anywhere in the requested
-    range; a partial range with some days missing only warns, see
-    process.partitions.existing_partitions. There is deliberately no ``build_liveness_day``, for
-    the same reason as ``detect.coverage``'s ``build_coverage_map``: a single day is just a range
-    of length one.
+    Idempotent PER DAY: a day whose ``out_root/date=.../part-0.parquet`` already exists is skipped
+    unless ``force=True``, so re-running over a range that overlaps a previous build only fills in
+    the new days -- see module docstring. A day with no clean partition is logged and skipped, not
+    fatal (mirrors the old whole-range builder's behaviour), but if NO day in the range produced an
+    output, this raises FileNotFoundError, same contract as before.
+
+    Returns the list of day-partition paths that exist after this call (both freshly built and
+    already-present), ordered by day. Writes are atomic (temp file + ``os.replace``, per
+    ``docs/PLAN_P4-0_P3-4.md``'s A0.8): a crash mid-write never leaves a partial, truncated Parquet
+    file that a later reader could mistake for a complete day.
     """
-    if out_path.exists() and not force:
-        logger.info(
-            "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
-        )
-        return out_path
+    written: list[Path] = []
+    con = duckdb.connect()
+    try:
+        for day in daterange(start, end):
+            day_out_path = partition_path(day, out_root)
+            if day_out_path.exists() and not force:
+                logger.info(
+                    "%s already exists, skipping (pass force=True / --force to rebuild)",
+                    day_out_path,
+                )
+                written.append(day_out_path)
+                continue
 
-    partitions = existing_partitions(start, end, in_root)
-    if not partitions:
+            day_partitions = existing_partitions(day, day, in_root)
+            if not day_partitions:
+                continue
+
+            _build(con, day_partitions, grid_size_deg, mobile_types)
+
+            (n_rows,) = con.execute("SELECT count(*) FROM presence").fetchone()
+            (n_mmsi,) = con.execute("SELECT count(DISTINCT mmsi) FROM presence").fetchone()
+            logger.info(
+                "%s: built liveness partition, %d (cell, hour, mmsi) row(s), %d distinct mmsi",
+                day.isoformat(),
+                n_rows,
+                n_mmsi,
+            )
+
+            built_at = datetime.now(timezone.utc)
+            git_sha = _git_sha()
+            day_out_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = day_out_path.with_suffix(".tmp")
+            con.execute(
+                "COPY (SELECT *, "
+                f"DATE '{day.isoformat()}' AS window_start, "
+                f"DATE '{day.isoformat()}' AS window_end, "
+                f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
+                f"'{git_sha}' AS git_sha "
+                "FROM presence ORDER BY cell_lat, cell_lon, cell_hour) "
+                f"TO '{tmp_path.as_posix()}' (FORMAT PARQUET)"
+            )
+            os.replace(tmp_path, day_out_path)
+            written.append(day_out_path)
+    finally:
+        con.close()
+
+    if not written:
         raise FileNotFoundError(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under {in_root}"
         )
-
-    con = duckdb.connect()
-    try:
-        _build(con, partitions, grid_size_deg, mobile_types)
-
-        (n_rows,) = con.execute("SELECT count(*) FROM presence").fetchone()
-        (n_cells,) = con.execute(
-            "SELECT count(DISTINCT cell_lat || ',' || cell_lon) FROM presence"
-        ).fetchone()
-        (n_mmsi,) = con.execute("SELECT count(DISTINCT mmsi) FROM presence").fetchone()
-        logger.info(
-            "Built liveness table: %d (cell, hour, mmsi) row(s), %d distinct cell(s), "
-            "%d distinct mmsi",
-            n_rows,
-            n_cells,
-            n_mmsi,
-        )
-
-        built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
-            f"DATE '{start.isoformat()}' AS window_start, "
-            f"DATE '{end.isoformat()}' AS window_end, "
-            f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM presence ORDER BY cell_lat, cell_lon, cell_hour) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
-        )
-    finally:
-        con.close()
-    return out_path
+    return written
 
 
 def cells_within(
@@ -290,13 +326,66 @@ class LivenessVerdict:
     n_cell_hours_scanned: int
 
 
+@lru_cache(maxsize=64)
+def _list_liveness_days(dir_str: str) -> tuple[date, ...]:
+    """One-time directory listing of a liveness root's existing ``date=YYYY-MM-DD`` partitions.
+
+    Cached per directory (by its string path) for the lifetime of the process. This exists
+    because the naive approach -- calling ``Path.exists()`` once per day in the requested range,
+    inside :func:`_liveness_sources`, which runs once per :func:`liveness_verdict` call -- costs
+    one filesystem stat per candidate day per call. A real run scores tens of thousands of gaps
+    (``detect.gaps``), each pulling in a ~30-40 day baseline window: measured on real data, that
+    naive version did not finish rebuilding P3-4's real 30-day equivalence check in over 10
+    minutes (2-3 million individual stats). One ``glob`` per directory, cached, replaces all of
+    that with a single listing.
+
+    Not invalidated mid-process: a caller that writes new day-partitions to the same directory
+    while a long-running scorer is using this cache (e.g. ``pipeline.window`` calling
+    ``build_liveness`` and then scoring in the same process) must not rely on the new days being
+    seen without a fresh process -- an acceptable constraint for this project's batch-run style,
+    same posture as every other builder here assuming a static input while it runs.
+    """
+    root = Path(dir_str)
+    if not root.is_dir():
+        return ()
+    days = []
+    for entry in root.glob("date=*"):
+        if not (entry / "part-0.parquet").exists():
+            continue
+        try:
+            days.append(date.fromisoformat(entry.name.removeprefix("date=")))
+        except ValueError:
+            continue
+    return tuple(sorted(days))
+
+
+def _liveness_sources(
+    path: Path, first_day: date, last_day: date
+) -> tuple[list[str], set[date]]:
+    """Resolve ``path`` to the list of Parquet file(s) ``liveness_verdict`` should read.
+
+    A file (legacy single-range artifact) resolves to itself unconditionally -- the caller cannot
+    know which days it covers without reading it, so an empty ``found_days`` is returned and the
+    legacy bounds-based denominator is used instead (see ``liveness_verdict``). A directory
+    resolves to every day-partition that exists in ``[first_day, last_day]`` (inclusive), plus the
+    set of days actually found -- the exact input A1.1's denominator fix needs, since day-partitions
+    are disjoint by construction and there is nothing to overcount. See :func:`_list_liveness_days`
+    for why this is a cached directory listing, not a per-day stat loop.
+    """
+    if path.is_file():
+        return [str(path)], set()
+    found_days = {d for d in _list_liveness_days(str(path)) if first_day <= d <= last_day}
+    sources = [str(partition_path(d, path)) for d in sorted(found_days)]
+    return sources, found_days
+
+
 def liveness_verdict(
     con: duckdb.DuckDBPyConnection,
     cells: Sequence[tuple[float, float]],
     window_start: datetime,
     window_end: datetime,
     exclude_mmsi: int | Sequence[int],
-    liveness_path: Path = LIVENESS_PATH,
+    liveness_path: Path = LIVENESS_ROOT,
     as_of: date | None = None,
     baseline_days: int = BASELINE_DAYS,
     min_corroborators: int = MIN_CORROBORATORS,
@@ -318,12 +407,12 @@ def liveness_verdict(
     ``exclude_mmsi``'s own messages first. See the module docstring for why the baseline must be
     leave-one-out too, not only the corroboration count.
 
-    The baseline rate's denominator is the portion of the *nominal* ``baseline_days``-day window
-    that ``liveness_path`` was actually built to cover (via its own ``window_start``/``window_end``
-    provenance columns), not ``baseline_days`` itself -- a caller asking for a 30-day baseline
-    against a table only built for 10 days gets a rate over 10 days of evidence, not a rate
-    silently diluted by 20 days that were never observed. See :attr:`LivenessVerdict.
-    baseline_hours_available`.
+    ``liveness_path`` may be a directory of day-partitions (the default, ``LIVENESS_ROOT`` --
+    see :func:`_liveness_sources`) or a single legacy whole-range file. **The baseline denominator
+    is computed differently in each mode** -- see the module docstring's "Accumulable by day"
+    section for why the directory-mode arithmetic (exact day count) replaces the legacy
+    file-mode arithmetic (span overlap against the file's own provenance) rather than sharing it.
+    See :attr:`LivenessVerdict.baseline_hours_available`.
     """
     if not cells:
         raise ValueError("cells must be non-empty")
@@ -354,11 +443,24 @@ def liveness_verdict(
         f"SELECT * FROM (VALUES {cells_values}) AS t(cell_lat, cell_lon)"
     )
 
-    query = (
-        "WITH raw AS (SELECT * FROM read_parquet(?)),"
-        "bounds AS ("
-        "  SELECT min(window_start) AS built_start, max(window_end) AS built_end FROM raw"
-        "),"
+    sources, found_days = _liveness_sources(liveness_path, baseline_start.date(), window_end.date())
+    if not sources:
+        # Nothing on disk covers this call's date range at all (only reachable in directory mode --
+        # file mode's own existence check above already guarantees at least that one source).
+        return LivenessVerdict(
+            verdict="no_evidence",
+            n_corroborators=0,
+            n_messages=0,
+            n_corroborators_class_a=0,
+            baseline_vessel_hours=0.0,
+            n_baseline_vessels=0,
+            baseline_hours_available=0.0,
+            expected_corroborators=0.0,
+            n_cells=len(cells),
+            n_cell_hours_scanned=0,
+        )
+
+    _live_base_cte = (
         "obs AS ("
         "  SELECT r.* FROM raw r"
         "  JOIN _liveness_cells c ON r.cell_lat = c.cell_lat AND r.cell_lon = c.cell_lon"
@@ -376,42 +478,88 @@ def liveness_verdict(
         "  FROM obs"
         "  WHERE cell_hour >= ? AND cell_hour < ?"
         ")"
-        "SELECT live.n_corroborators, live.n_messages, live.n_corroborators_class_a,"
-        "       base.vessel_hours, base.n_vessels,"
-        "       (SELECT count(DISTINCT cell_hour) FROM obs),"
-        "       bounds.built_start, bounds.built_end "
-        "FROM live, base, bounds"
     )
-    (
-        n_corroborators,
-        n_messages,
-        n_corroborators_class_a,
-        baseline_vessel_hours,
-        n_baseline_vessels,
-        n_cell_hours_scanned,
-        built_start,
-        built_end,
-    ) = con.execute(
-        query,
-        [
-            str(liveness_path),
-            exclude_mmsis,
-            obs_upper_bound,
-            window_start,
-            window_end,
-            baseline_start,
-            baseline_end,
-        ],
-    ).fetchone()
 
-    if built_start is None or built_end is None:
-        baseline_hours_available = 0.0
+    if liveness_path.is_file():
+        # Legacy whole-range file: the old bounds-based denominator (span overlap against the
+        # file's own window_start/window_end provenance) -- see module docstring.
+        query = (
+            "WITH raw AS (SELECT * FROM read_parquet(?)),"
+            "bounds AS ("
+            "  SELECT min(window_start) AS built_start, max(window_end) AS built_end FROM raw"
+            "),"
+            f"{_live_base_cte}"
+            "SELECT live.n_corroborators, live.n_messages, live.n_corroborators_class_a,"
+            "       base.vessel_hours, base.n_vessels,"
+            "       (SELECT count(DISTINCT cell_hour) FROM obs),"
+            "       bounds.built_start, bounds.built_end "
+            "FROM live, base, bounds"
+        )
+        (
+            n_corroborators,
+            n_messages,
+            n_corroborators_class_a,
+            baseline_vessel_hours,
+            n_baseline_vessels,
+            n_cell_hours_scanned,
+            built_start,
+            built_end,
+        ) = con.execute(
+            query,
+            [
+                sources[0],
+                exclude_mmsis,
+                obs_upper_bound,
+                window_start,
+                window_end,
+                baseline_start,
+                baseline_end,
+            ],
+        ).fetchone()
+
+        if built_start is None or built_end is None:
+            baseline_hours_available = 0.0
+        else:
+            built_start_ts = datetime.combine(built_start, datetime.min.time())
+            built_end_ts = datetime.combine(built_end + timedelta(days=1), datetime.min.time())
+            overlap_start = max(baseline_start, built_start_ts)
+            overlap_end = min(baseline_end, built_end_ts)
+            baseline_hours_available = max(
+                0.0, (overlap_end - overlap_start).total_seconds() / 3600.0
+            )
     else:
-        built_start_ts = datetime.combine(built_start, datetime.min.time())
-        built_end_ts = datetime.combine(built_end + timedelta(days=1), datetime.min.time())
-        overlap_start = max(baseline_start, built_start_ts)
-        overlap_end = min(baseline_end, built_end_ts)
-        baseline_hours_available = max(0.0, (overlap_end - overlap_start).total_seconds() / 3600.0)
+        # Directory of day-partitions: A1.1's exact denominator -- 24h times the number of
+        # baseline days actually present on disk, never a span computation. See module docstring.
+        query = f"WITH raw AS (SELECT * FROM read_parquet(?)), {_live_base_cte} " + (
+            "SELECT live.n_corroborators, live.n_messages, live.n_corroborators_class_a,"
+            "       base.vessel_hours, base.n_vessels,"
+            "       (SELECT count(DISTINCT cell_hour) FROM obs) "
+            "FROM live, base"
+        )
+        (
+            n_corroborators,
+            n_messages,
+            n_corroborators_class_a,
+            baseline_vessel_hours,
+            n_baseline_vessels,
+            n_cell_hours_scanned,
+        ) = con.execute(
+            query,
+            [
+                sources,
+                exclude_mmsis,
+                obs_upper_bound,
+                window_start,
+                window_end,
+                baseline_start,
+                baseline_end,
+            ],
+        ).fetchone()
+
+        baseline_start_date = baseline_start.date()
+        baseline_end_date = baseline_end.date()  # exclusive
+        covered = {d for d in found_days if baseline_start_date <= d < baseline_end_date}
+        baseline_hours_available = 24.0 * len(covered)
 
     rate = baseline_vessel_hours / baseline_hours_available if baseline_hours_available > 0 else 0.0
     expected_corroborators = rate * window_hours
@@ -457,7 +605,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--out-path", default=str(LIVENESS_PATH), help="Output path for the liveness table"
+        "--out-root",
+        default=str(LIVENESS_ROOT),
+        help="Root directory for day-partitioned liveness output",
     )
     return parser.parse_args(argv)
 
@@ -471,7 +621,7 @@ def main(argv: list[str] | None = None) -> None:
         start,
         end,
         in_root=Path(args.in_dir),
-        out_path=Path(args.out_path),
+        out_root=Path(args.out_root),
         grid_size_deg=args.grid_size_deg,
         force=args.force,
     )

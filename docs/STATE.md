@@ -180,17 +180,36 @@ _Last updated: 2026-09-22_
 
 ## In progress
 
-Nothing in progress.
+**P3-4, Part A: per-window storage pipeline -- A1 done, A2-A5 not started.** Full spec:
+`docs/PLAN_P4-0_P3-4.md` (committed to the repo). **A1 (make `liveness` accumulable by day) is
+done and verified on real data**: `detect/liveness.py`'s `build_liveness` now writes one
+day-partition at a time (`data/coverage/liveness/date=YYYY-MM-DD/part-0.parquet`, atomic writes,
+skips days already built unless `force=True`); `liveness_verdict` accepts that directory (new
+default) or a single legacy whole-range file (still supported). A1.1's denominator fix (exact
+day-count in directory mode, replacing the old span-based arithmetic that silently overcounts
+under disjoint coverage and biases toward `no_evidence`) is implemented and unit-tested with a
+disjoint-coverage fixture. Real migration: rebuilt `data/coverage/liveness/` over the full
+2024-06-01..2024-06-30 window (3,988,982 rows, matching the legacy file exactly) while the legacy
+file still exists on disk (nothing deleted -- deletion is A5's job, not A1's). Equivalence check
+against `detect.gaps` passed exactly: 74,546 candidate gaps, identical verdict breakdown, zero
+row-level differences against the existing real `gaps.parquet`. A real performance bug (a naive
+per-call directory stat loop, 2-3 million filesystem stats projected) was found and fixed via a
+cached one-time directory listing before this check could even finish -- directory mode is now
+~3x faster than the old single-file mode, not just no-worse. 28 new/rewritten tests (`tests/
+test_liveness.py`), 365 total, `ruff` clean. Full detail in `docs/DECISIONS.md`'s 2026-09-22
+entry. **Not started yet**: A2 (per-window artifacts for every detector plus a `ship_type`
+reference table -- also touches `process/tracks.py`/`process/identity.py`, which still write
+single whole-range files), A3 (`process/thin.py`), A4 (`pipeline/window.py`), A5
+(`pipeline/prune.py` + the A0.4 re-download drill, the gate before any deletion is trusted).
 
 ## Next up
 
-**P3-4: per-window storage pipeline.** Full spec already approved: `docs/PLAN_P4-0_P3-4.md`, Part A
-(committed to the repo, so a fresh session can read it without depending on a local path). So that
-windows sampled across 2022-2024 can be processed with a disk peak of ~1 window instead of the sum
-of all: partition `liveness` by day, make every detector write per-window artifacts, add thinned
-tracks for the map, and split creation (`pipeline/window.py`, never deletes) from deletion
-(`pipeline/prune.py`, opt-in, quarantine-first). The re-download drill (A0.4 in the plan) is the
-gate that must pass before any deletion is trusted.
+**Continue P3-4/A2**: per-window artifacts. `data/<kind>/window=<start>_<end>/part-0.parquet` for
+every detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`, `behaviour`) and for
+`process/tracks.py`/`process/identity.py` (currently single whole-range files, same overwrite
+problem A1 fixed for `liveness`), plus a new `data/reference/ship_type/window=.../part-0.parquet`
+so `features/panel.py:365` and `detect/identity_anomalies.py:461` stop reading clean partitions
+directly. See `docs/PLAN_P4-0_P3-4.md`'s A2 section for the exact hard blocker list.
 
 **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
 
@@ -308,8 +327,11 @@ gate that must pass before any deletion is trusted.
 
 **~80 GB free** (of 931 GB) as of 2026-09-19 (not re-measured this session; last real check
 2026-09-18). `data/clean/` for the 30-day window is ~14 GB.
-`data/identity/`, `data/tracks/`, `data/coverage/` together are a few MB; `data/detect/` (gaps,
-spoofing, sts) is well under 200 MB total — the whole point of reducing to aggregates. One raw day
+`data/identity/` and `data/tracks/` together are a few MB; `data/coverage/` is ~123 MB (the
+legacy `liveness.parquet`, ~65 MB, plus the new partitioned `liveness/`, ~58 MB, both present at
+once post-P3-4/A1 migration — the legacy file is not deleted until P3-4/A5's `prune.py` exists and
+is run); `data/detect/` (gaps, spoofing, sts) is well under 200 MB total — the whole point of
+reducing to aggregates. One raw day
 ≈ 507 MB, discarded immediately after cleaning by `pipeline/backfill.py`. Phase 3-4's "years of
 depth" requirement (several validation cutoffs `T`, each needing data before and after) should
 still be met by **sampling short windows around each cutoff**, not downloading every day, and

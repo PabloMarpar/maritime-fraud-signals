@@ -244,10 +244,10 @@ def test_build_gap_scores_end_to_end(tmp_path):
             (111, _ts(0), 55.05, 12.05, "Class A"),
         ],
     )
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
+    liveness_path = tmp_path / "coverage" / "liveness"
     from detect import liveness
 
-    liveness.build_liveness(DAY, DAY, in_root=clean_root, out_path=liveness_path)
+    liveness.build_liveness(DAY, DAY, in_root=clean_root, out_root=liveness_path)
 
     voyages_path = tmp_path / "tracks" / "voyages.parquet"
     rows = [
@@ -288,10 +288,10 @@ def test_build_gap_scores_end_to_end(tmp_path):
 def test_build_gap_scores_is_idempotent_by_default(tmp_path, caplog):
     clean_root = tmp_path / "clean" / "ais_dk"
     _write_clean_partition(clean_root, DAY, [(111, _ts(0), 55.05, 12.05, "Class A")])
-    liveness_path = tmp_path / "coverage" / "liveness.parquet"
+    liveness_path = tmp_path / "coverage" / "liveness"
     from detect import liveness
 
-    liveness.build_liveness(DAY, DAY, in_root=clean_root, out_path=liveness_path)
+    liveness.build_liveness(DAY, DAY, in_root=clean_root, out_root=liveness_path)
 
     voyages_path = tmp_path / "tracks" / "voyages.parquet"
     _write_voyages(
