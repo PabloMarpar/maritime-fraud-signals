@@ -180,7 +180,7 @@ _Last updated: 2026-09-22_
 
 ## In progress
 
-**P3-4, Part A: per-window storage pipeline -- A1 done, A2-A5 not started.** Full spec:
+**P3-4, Part A: per-window storage pipeline -- A1 and A2 done, A3-A5 not started.** Full spec:
 `docs/PLAN_P4-0_P3-4.md`. **A1 done 2026-09-22**: `detect/liveness.py`'s `build_liveness` now
 writes one day-partition at a time (`data/coverage/liveness/date=.../part-0.parquet`, atomic,
 skips days already built) instead of one whole-range file the next window would overwrite;
@@ -190,19 +190,40 @@ the old arithmetic silently biased verdicts toward `no_evidence`). Verified on r
 2024-06-01..2024-06-30 (3,988,982 rows, matches the legacy file exactly), and `detect.gaps`
 rebuilt against it reproduces the existing real `gaps.parquet` row for row (74,546 gaps, zero
 diffs). A real perf bug (naive per-day stat loop) found and fixed along the way -- directory mode
-is now ~3x faster than the legacy path, not just equivalent. 365 tests, `ruff` clean. Full detail:
-`docs/DECISIONS.md`'s 2026-09-22 entry.
+is now ~3x faster than the legacy path, not just equivalent. 365 tests, `ruff` clean.
+
+**A2 done 2026-09-22**: every detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`,
+`behaviour`) plus `process/tracks.py`/`process/identity.py` now write
+`data/<kind>/window=<start>_<end>/part-0.parquet` atomically instead of one whole-range file a
+later window silently overwrote. `detect/gaps.py` deliberately NOT converted -- the plan's own A2
+section lists it as a consumer, not a producer. New `process/ship_type.py` fixes the plan's named
+hard blocker: `features/panel.py`'s `_build_ship_type` and `detect/identity_anomalies.py`'s
+`_build_ship_types` both used to scan clean partitions directly for this one static fact; both now
+read a shared raw `(mmsi, ship_type, type_of_mobile, n_messages)` reference instead, each
+re-applying its own prior resolution logic on top (provably equivalent, verified against real
+data). New shared helpers in `process/partitions.py`
+(`window_partition_path`/`atomic_write_parquet`/`partition_exists`/`git_sha`). Consumer defaults
+(`mmsi_imo_path`/`voyages_path`/`liveness_path`/`spoofing_path`/`sts_path`/
+`identity_anomalies_path`/`behaviour_path`/`anchorages_path`) point at `window=*` globs; the one
+exception is `ship_type_reference_path`, resolved to the caller's own exact window rather than a
+glob, so this one feature doesn't silently widen the already-documented "whole window, no month
+bound" limitation (see the open question below) beyond what P3-3 already flagged.
+**Real-window equivalence check (delegated to a background agent) PASSED for all 9 real builds**
+against the existing 2024-06-01..2024-06-30 legacy artifacts: exact row-count match on 8/9 (the
+9th, `spoofing`, 10,098,758 vs the legacy run's 10,098,760, traced to a pre-existing
+non-deterministic tie-break in `check_impossible_speed`'s unmodified SQL -- not a regression, see
+open questions); every substantive column (excluding provenance) matched exactly except a handful
+of floating-point last-bit differences (`voyages`: 254/95,692 rows; `anchorages`: 273/900 rows)
+and one `sts` row's `mode()`-tie-break `nav_status_b` (doesn't change that row's confidence). 381
+tests, `ruff` clean, both re-confirmed after the real run. Full detail:
+`docs/DECISIONS.md`'s 2026-09-22 "P3-4/A2" entry.
 
 ## Next up
 
-**P3-4/A2**: per-window artifacts. `data/<kind>/window=<start>_<end>/part-0.parquet` for every
-detector (`anchorages`, `spoofing`, `sts`, `identity_anomalies`, `behaviour`) AND for
-`process/tracks.py`/`process/identity.py` (same overwrite problem A1 just fixed for `liveness`,
-still unfixed there), plus a new `data/reference/ship_type/window=.../part-0.parquet` so
-`features/panel.py:365` and `detect/identity_anomalies.py:461` stop reading clean partitions
-directly. See `docs/PLAN_P4-0_P3-4.md`'s A2 section for the exact hard-blocker list. After A2:
-A3 (`process/thin.py`), A4 (`pipeline/window.py`, creates only), A5 (`pipeline/prune.py`, deletes
-with quarantine -- gated on the A0.4 re-download drill, not yet run).
+**P3-4/A3**: `process/thin.py`, downsampled tracks (~5min buckets) for the Phase 5 map and manual
+review only -- never for re-detection. Measure real per-day size before committing to the interval.
+After A3: A4 (`pipeline/window.py`, creates only) and A5 (`pipeline/prune.py`, deletes with
+quarantine -- gated on the A0.4 re-download drill, not yet run).
 
 **P4-1 (naive baseline)** stays blocked on the vessel-age open question below regardless of P3-4.
 
@@ -212,6 +233,20 @@ with quarantine -- gated on the A0.4 re-download drill, not yet run).
 
 ## Open questions
 
+- **`detect/spoofing.py`'s `check_impossible_speed` has no tie-break on its `lag() OVER (PARTITION
+  BY mmsi ORDER BY timestamp)` window, so its event count is non-deterministic across reruns when
+  an mmsi has duplicate `(mmsi, timestamp)` rows** -- confirmed real during P3-4/A2's equivalence
+  check (2026-09-22): re-running the real 30-day window reproduced 5,497 `impossible_speed` events
+  against the original run's 5,499, isolated entirely to that one check (`on_land`/
+  `synthetic_circle`/`simultaneous_position` were exact). Root cause: mmsi 219018851 alone has 14
+  duplicate-timestamp rows on 2024-06-20 -- exactly the population `simultaneous_position` exists
+  to catch -- and which duplicate `lag()` treats as "previous" is order-dependent under DuckDB's
+  parallel execution. Pre-existing in the unmodified SQL, not introduced by A2's storage-layout
+  change; not fixed here. Would need an explicit secondary sort key (e.g. a stable row id) added
+  to the `lag()` window if exact reproducibility of spoofing counts across reruns ever matters
+  downstream. `detect/sts.py`'s `nav_status` `mode()` resolution has the same class of issue (one
+  real row's `nav_status_b` flipped between reruns during the same check, though it happened not
+  to change that row's confidence score) -- revisit both together if this becomes load-bearing.
 - **THE BIG ONE, RESOLVED by P4-0 (2026-09-22): four of five detector families carry no rescuable
   signal against the sanctions label in this window, with or without exposure normalization.** The
   ad-hoc check that raised this question (below, kept for the record) hypothesized that raw counts
@@ -324,7 +359,12 @@ with quarantine -- gated on the A0.4 re-download drill, not yet run).
 legacy `liveness.parquet`, ~65 MB, plus the new partitioned `liveness/`, ~58 MB, both present at
 once post-P3-4/A1 migration — the legacy file is not deleted until P3-4/A5's `prune.py` exists and
 is run); `data/detect/` (gaps, spoofing, sts) is well under 200 MB total — the whole point of
-reducing to aggregates. One raw day
+reducing to aggregates. Post-P3-4/A2, `data/coverage/anchorages/`, `data/detect/{spoofing,sts,
+identity_anomalies,behaviour}/`, `data/tracks/voyages/`, `data/identity/mmsi_imo/` and the new
+`data/reference/ship_type/` each hold one `window=2024-06-01_2024-06-30/` partition ALONGSIDE
+their legacy single-file counterpart (same "both present until A5 prunes" posture as A1's
+liveness migration) — measured real total ~115 MB added (dominated by `spoofing/`'s 109 MB,
+matching its on_land-heavy legacy file), well within budget. One raw day
 ≈ 507 MB, discarded immediately after cleaning by `pipeline/backfill.py`. Phase 3-4's "years of
 depth" requirement (several validation cutoffs `T`, each needing data before and after) should
 still be met by **sampling short windows around each cutoff**, not downloading every day, and

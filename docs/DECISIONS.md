@@ -983,3 +983,103 @@ _2026-09-22_
   a ship_type reference table, A3 thinned tracks, A4 `pipeline/window.py` orchestration, A5
   `pipeline/prune.py` deletion with quarantine, and the A0.4 re-download drill) are not started.
   `docs/PLAN_P4-0_P3-4.md`'s Part A spec still governs; nothing here reopens A1's design.
+
+_2026-09-22_ (P3-4/A2: per-window storage for the five detectors, process.tracks/identity, and a
+new ship_type reference)
+
+- **Shared window-partition helpers landed in `process/partitions.py`** (`window_partition_path`,
+  `atomic_write_parquet`, `partition_exists`, `git_sha` -- the last deduplicated from what had been
+  a byte-identical `_git_sha()` copy in every one of the seven modules touched this session).
+  `atomic_write_parquet` is temp-file-plus-`os.replace`, same pattern A1 established for
+  `detect.liveness`. `partition_exists` exists because `Path.exists()` on a `window=*/...` glob
+  string always returns `False` (no file is literally named that) -- every consumer whose default
+  input changed from a single file to a glob needs this instead of a bare `.exists()` check, or
+  its "does the input exist" precondition would always fail even with real data present.
+- **`window=<start>_<end>/part-0.parquet` is the new layout for `detect.anchorages`/`spoofing`/
+  `sts`/`identity_anomalies`/`behaviour` and `process.tracks`/`identity`.** Each `build_*`
+  function's idempotency check is now simply "does this exact window's path exist" -- the old
+  single-file layout's `ValueError` on a mismatched stored window is gone outright, since a
+  different `[start, end]` now lands at a different path by construction; there is nothing left to
+  mismatch. `detect.gaps` is deliberately NOT converted -- the plan's own A2 section lists it as a
+  consumer (of `voyages_path`/`liveness_path`), not a producer, and its own `gaps.parquet` stays a
+  single whole-range file.
+- **DuckDB auto-detects the `window=...` Hive-style directory name and injects an extra `window`
+  string column into `SELECT *`, even reading a single explicit file path, not only a glob.**
+  Verified in `tests/test_partitions.py`. Never collides with the explicit `window_start`/
+  `window_end` DATE columns every builder already writes, but a caller doing `SELECT *` over one of
+  these paths should not be surprised by it.
+- **A glob string works as a bound `read_parquet(?)` parameter, not just a literal.** A1's own
+  docstring flagged this as unverified for the list-based liveness case; confirmed directly this
+  session (`tests/test_partitions.py`) before relying on it everywhere a consumer's default now
+  reads `data/<kind>/window=*/part-0.parquet`.
+- **New `process/ship_type.py`: a raw `(mmsi, ship_type, type_of_mobile, n_messages)` reference,
+  per window.** This is the plan's named "hard blocker" -- `features.panel._build_ship_type` and
+  `detect.identity_anomalies._build_ship_types` both scanned clean partitions directly for this one
+  static fact, which P3-4's whole point is to stop doing. Deliberately NOT the already-resolved
+  modal ship_type: the two callers apply different resolution logic on top (the panel does no text
+  normalization and no `type_of_mobile` filter; identity_anomalies normalizes/validates text and
+  filters to `detect.liveness.MOBILE_TYPES`), and unifying those into one resolution here would
+  have been a silent behaviour change disguised as a storage refactor. Both callers now read this
+  reference and re-run their own prior logic over it via `sum(n_messages)` in place of the original
+  `count(*)` over raw messages -- provably the same regrouping, verified byte-for-byte against the
+  real window (see below).
+- **`ship_type_reference_path`/`ship_type_reference_root` is resolved to the caller's own EXACT
+  window, never a glob**, unlike every other consumer default changed this session. Both
+  `detect.identity_anomalies.build_identity_events` and `features.panel.build_panel` already had
+  the "computed over the WHOLE window, no month bound" limitation documented (P3-3); a glob
+  default would have silently widened that from "this one window" to "every window ever built".
+  Kept scoped to exactly what was already documented, not wider.
+- **`features.panel.build_panel` lost `clean_root`/`CLEAN_ROOT` and the now-dead
+  `existing_partitions`/`_partitions_union_sql` entirely.** Ship_type was their only remaining use
+  in this module; fixing the hard blocker also removes panel.py's last direct dependency on raw
+  clean data staying on disk, which matters once P3-4/A5 starts discarding it.
+- **`mmsi_imo_path`/`voyages_path`/`liveness_path` (in `detect.gaps`, `detect.spoofing`,
+  `detect.behaviour`, `features.panel`) default to a glob over every window built so far.** Safe
+  for `voyages_path`/`liveness_path` because their own aggregate queries already filter to the
+  relevant window/month (`_build_voyage_counts`'s explicit date bounds; `_exposure_agg`'s join on
+  `year_month`) regardless of what else the glob contains. NOT safe in the same way for
+  `mmsi_imo_path` in `features.panel` -- `_build_roster` has no date filter at all, so this
+  genuinely widens the already-documented "whole window, no month bound" limitation from "this
+  one window" to "every window ever built", noted explicitly in both the module and function
+  docstrings rather than silently. Deferred to P4-3 exactly as P3-3 already promised, not solved
+  here.
+- **`process.sanctions_match.identity_valid` gained a `GROUP BY (mmsi, imo)`** the plain `SELECT`
+  didn't have before. `identity_path`'s default glob can legitimately repeat a pair across windows
+  for a vessel active in more than one; without the aggregation the later JOIN would emit one row
+  per (sanctions record x window occurrence) instead of per (sanctions record x mmsi), silently
+  multiplying match counts once a second window exists. Not observable against today's
+  single-window real data (verified: the aggregation is a no-op there, `sum`/`min`/`max`/`bool_or`
+  over exactly one row each), but a real bug the glob default would otherwise introduce silently
+  the moment a second window is built.
+- **`detect.identity_anomalies.build_vessel_links`'s own output stays one flat file, not
+  window-partitioned** -- union-find over presumed-same-hull groups is inherently a whole-history
+  recomputation, not a per-window append, so there was no overwrite problem to fix. Its INPUT
+  default (`events_path`) did change, to a glob over every window's identity-anomaly events, so a
+  link spanning two windows is not missed; the CLI's own call to it was wired to only the
+  just-built window's events before this session and is fixed to use that default.
+- **Real-window equivalence check, delegated to a background agent, PASSED for all nine real
+  builds against the existing 2024-06-01..2024-06-30 legacy artifacts** (`process.tracks`,
+  `process.identity`, `process.ship_type` [new, no legacy comparator], `detect.anchorages`,
+  `detect.spoofing`, `detect.sts`, `detect.identity_anomalies`, `build_vessel_links`,
+  `detect.behaviour`) -- row counts matched exactly on 8/9 (spoofing: 10,098,758 vs 10,098,760, see
+  next entry), and every substantive column (excluding `built_at`/`git_sha`) matched exactly except
+  a handful of floating-point last-bit differences in `voyages` (254/95,692 rows,
+  lat/lon `arg_min`/`arg_max` under DuckDB's parallel execution), `anchorages`
+  (273/900 rows, a summed `total_stationary_hours` float), and one `sts` row's `nav_status_b`
+  (a `mode()` tie-break that happens not to change that row's confidence score). Wall-clock: tracks
+  13m54s, identity 1m12s, ship_type 3s, anchorages 1m9s, spoofing 128m48s (concurrent with
+  sts/identity_anomalies; dominated by a 10M-row `executemany` insert -- an existing cost, not
+  something this session's changes made slower), sts 23m35s, identity_anomalies 3m51s, behaviour
+  42s. 381 tests, `ruff` clean, both re-confirmed after the real run.
+- **`detect.spoofing.check_impossible_speed`'s two-row discrepancy (5,497 vs the legacy run's
+  5,499) is a pre-existing non-determinism, not a P3-4/A2 regression.** Root-caused: its
+  `lag() OVER (PARTITION BY mmsi ORDER BY timestamp)` has no tie-break secondary sort key, so when
+  an mmsi has duplicate `(mmsi, timestamp)` rows (confirmed real: mmsi 219018851 alone has 14 such
+  duplicates on 2024-06-20 -- exactly the population `simultaneous_position` exists to catch),
+  which row DuckDB treats as "previous" is non-deterministic across runs/parallelism, changing the
+  implied speed for a handful of pairs. Present in the unmodified SQL before this session touched
+  the file; this session's rebuild happened to surface it because it re-ran the check against the
+  same real data a second time. Not fixed here -- would need an explicit tie-break (e.g. a stable
+  row-id) added to the `lag()` window, out of scope for a storage-layout change. Revisit if
+  reproducibility of exact spoofing counts across reruns ever matters downstream; `detect.sts`'s
+  `nav_status` `mode()` tie-break (see above) is the same class of issue.
