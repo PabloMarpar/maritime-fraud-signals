@@ -120,7 +120,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
-import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -131,13 +130,26 @@ import duckdb
 from detect.liveness import MOBILE_TYPES
 from process.identity import VALID_IMO_SQL
 from process.mid import country_of, mid_of
-from process.partitions import existing_partitions
+from process.partitions import (
+    atomic_write_parquet,
+    existing_partitions,
+    git_sha,
+    partition_exists,
+    window_partition_path,
+)
+from process.ship_type import SHIP_TYPE_ROOT
 
 logger = logging.getLogger(__name__)
 
 CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
-IDENTITY_ANOMALIES_PATH = DETECT_ROOT / "identity_anomalies.parquet"
+# data/detect/identity_anomalies/window=<start>_<end>/part-0.parquet, one file per window
+# (P3-4/A2) -- see build_identity_events. Legacy single-file layout was
+# data/detect/identity_anomalies.parquet.
+IDENTITY_ANOMALIES_ROOT = DETECT_ROOT / "identity_anomalies"
+# Default read-side path for build_vessel_links: every window's events in one glob -- see
+# detect.anchorages.ANCHORAGES_GLOB for why this works as a bound read_parquet(?) parameter.
+IDENTITY_ANOMALIES_GLOB = IDENTITY_ANOMALIES_ROOT / "window=*" / "part-0.parquet"
 IDENTITY_ROOT = Path("data/identity")
 VESSEL_LINKS_PATH = IDENTITY_ROOT / "vessel_links.parquet"
 
@@ -173,25 +185,6 @@ KIND_BASE_CONFIDENCE: dict[str, float] = {
 }
 CROSS_MID_BONUS = 0.10
 SHIP_TYPE_INSTABILITY_PENALTY = 0.15
-
-
-def _git_sha() -> str:
-    """Short git commit SHA of the working tree, or "unknown" if it can't be determined.
-
-    Provenance metadata only, never correctness-critical, so any failure (not a git repo, git
-    not on PATH, etc.) falls back to a literal string rather than raising.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
 
 
 def _normalize_text_sql(col: str) -> str:
@@ -458,23 +451,30 @@ def _build_identity_pairs(
     )
 
 
-def _build_ship_types(con: duckdb.DuckDBPyConnection, partitions: list[tuple[date, Path]]) -> None:
+def _build_ship_types(con: duckdb.DuckDBPyConnection, ship_type_reference_path: Path) -> None:
     """Materialize `_ship_types`: resolved ship_type per mmsi (mode by message count,
     deterministic tie-break), plus whether the mmsi was EVER validly Tanker/Cargo -- the gate
     check_no_valid_imo uses, deliberately not the resolved type itself (see module docstring).
-    Reads only mmsi/ship_type.
+
+    Reads process.ship_type's pre-extracted (mmsi, ship_type, type_of_mobile, n_messages)
+    reference instead of scanning clean partitions directly (P3-4/A2's hard blocker) -- same
+    normalization/filtering/mode-resolution logic as before, applied over that raw grain via
+    `sum(n_messages)` in place of the original `count(*)` over raw messages. The two are
+    equivalent because the reference's n_messages is itself just a prior GROUP BY count and
+    summation commutes with a normalize-then-regroup, not a new source of truth with different
+    semantics -- see process.ship_type's module docstring.
     """
     imo_required_sql = ", ".join(f"'{t.upper()}'" for t in IMO_REQUIRED_SHIP_TYPES)
     con.execute(
         "CREATE OR REPLACE TEMP TABLE _ship_types AS "
         "WITH messages AS ("
         "  SELECT mmsi, "
-        f"         {_normalize_text_sql('ship_type')} AS ship_type_norm "
-        "  FROM (" + _partitions_union_sql(partitions, "mmsi, ship_type, type_of_mobile") + ") "
+        f"         {_normalize_text_sql('ship_type')} AS ship_type_norm, n_messages "
+        f"  FROM read_parquet('{ship_type_reference_path.as_posix()}') "
         f"  WHERE type_of_mobile IN ({_mobile_types_sql()})"
         "), "
         "counts AS ("
-        "  SELECT mmsi, ship_type_norm, count(*) AS n "
+        "  SELECT mmsi, ship_type_norm, CAST(sum(n_messages) AS BIGINT) AS n "
         "  FROM messages "
         f"  WHERE {_valid_text_sql('ship_type_norm')} "
         "  GROUP BY mmsi, ship_type_norm"
@@ -929,19 +929,25 @@ def build_identity_events(
     start: date,
     end: date,
     in_root: Path = CLEAN_ROOT,
-    out_path: Path = IDENTITY_ANOMALIES_PATH,
+    ship_type_reference_root: Path = SHIP_TYPE_ROOT,
+    out_root: Path = IDENTITY_ANOMALIES_ROOT,
     force: bool = False,
 ) -> Path:
-    """Run all eight identity-anomaly checks over [start, end] (inclusive) and write out_path.
+    """Run all eight identity-anomaly checks over [start, end] (inclusive) and write to
+    ``out_root/window=<start>_<end>/part-0.parquet`` (P3-4/A2).
 
-    Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError naming process.clean.clean_range if no clean partition
-    exists anywhere in the requested range.
+    Idempotent per window: if that exact window's output already exists, this is a no-op unless
+    force=True. Returns the output path either way. A different [start, end] lands at a different
+    path by construction, so windows accumulate instead of overwriting each other. Raises
+    FileNotFoundError naming process.clean.clean_range if no clean partition exists anywhere in
+    the requested range, or process.ship_type.build_ship_type_reference if that window's
+    reference is missing (P3-4/A2's hard blocker fix -- see _build_ship_types).
 
     Reads only AIS static-data fields -- no voyages.parquet, no position -- see module docstring.
     Every event carries both event_time and knowable_at; see module docstring's temporal-leakage
     section for the contract features/ must follow.
     """
+    out_path = window_partition_path(start, end, out_root)
     if out_path.exists() and not force:
         logger.info(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
@@ -954,6 +960,12 @@ def build_identity_events(
             f"No clean partitions found for {start.isoformat()}..{end.isoformat()} under "
             f"{in_root}; run process.clean.clean_range first"
         )
+    ship_type_reference_path = window_partition_path(start, end, ship_type_reference_root)
+    if not ship_type_reference_path.exists():
+        raise FileNotFoundError(
+            f"No ship_type reference at {ship_type_reference_path}; run "
+            "process.ship_type.build_ship_type_reference first, for this exact window"
+        )
 
     con = duckdb.connect()
     try:
@@ -963,7 +975,7 @@ def build_identity_events(
             ("imo_pairs", lambda: _build_imo_pairs(con, partitions)),
             ("has_valid_imo", lambda: _build_has_valid_imo(con)),
             ("identity_pairs", lambda: _build_identity_pairs(con, partitions)),
-            ("ship_types", lambda: _build_ship_types(con, partitions)),
+            ("ship_types", lambda: _build_ship_types(con, ship_type_reference_path)),
         ):
             stage_start = datetime.now(timezone.utc)
             run_stage()
@@ -1001,7 +1013,7 @@ def build_identity_events(
         )
 
         built_at = datetime.now(timezone.utc)
-        git_sha = _git_sha()
+        sha = git_sha()
         con.execute(f"CREATE OR REPLACE TEMP TABLE _identity_events ({_IDENTITY_EVENTS_DDL})")
         if events:
             con.executemany(
@@ -1043,15 +1055,15 @@ def build_identity_events(
                 ],
             )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            "COPY (SELECT *, "
+        atomic_write_parquet(
+            con,
+            "SELECT *, "
             f"DATE '{start.isoformat()}' AS window_start, "
             f"DATE '{end.isoformat()}' AS window_end, "
             f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{git_sha}' AS git_sha "
-            "FROM _identity_events ORDER BY mmsi, knowable_at, kind) "
-            f"TO '{out_path.as_posix()}' (FORMAT PARQUET)"
+            f"'{sha}' AS git_sha "
+            "FROM _identity_events ORDER BY mmsi, knowable_at, kind",
+            out_path,
         )
     finally:
         con.close()
@@ -1075,7 +1087,7 @@ class VesselLink:
 
 
 def build_vessel_links(
-    events_path: Path = IDENTITY_ANOMALIES_PATH,
+    events_path: Path = IDENTITY_ANOMALIES_GLOB,
     out_path: Path = VESSEL_LINKS_PATH,
     force: bool = False,
 ) -> Path:
@@ -1085,7 +1097,13 @@ def build_vessel_links(
     A second, independently idempotent builder -- not a side effect of build_identity_events,
     since a builder returning one Path cannot own two outputs without making idempotency
     ambiguous. Idempotent: no-op if out_path exists unless force=True. Raises FileNotFoundError
-    naming build_identity_events if events_path is missing.
+    naming build_identity_events if events_path is missing. ``events_path`` defaults to a glob
+    over every window built so far (``IDENTITY_ANOMALIES_GLOB``, P3-4/A2), so this naturally
+    groups vessels using the whole accumulated identity-anomaly history, not just one window's.
+    Unlike ``build_identity_events``/``build_ship_type_reference``, this builder's own output
+    stays one flat file, not window-partitioned: union-find over presumed-same-hull groups is
+    inherently a whole-history recomputation, not a per-window append, so there is no overwrite
+    problem to fix here -- only the input default needed to change.
 
     **Not a ground truth.** A shared IMO or (name, callsign) is exactly as consistent with "one
     hull, two legitimate radio identities" as with "one vessel spoofing another's papers" -- this
@@ -1111,7 +1129,7 @@ def build_vessel_links(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
         )
         return out_path
-    if not events_path.exists():
+    if not partition_exists(events_path):
         raise FileNotFoundError(
             f"No identity-anomalies table at {events_path}; run "
             "detect.identity_anomalies.build_identity_events first"
@@ -1200,9 +1218,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--in-dir", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
     )
     parser.add_argument(
-        "--out-path",
-        default=str(IDENTITY_ANOMALIES_PATH),
-        help="Output path for identity-anomaly events",
+        "--ship-type-reference-root",
+        default=str(SHIP_TYPE_ROOT),
+        help="Root directory for the window-partitioned ship_type reference "
+        "(process.ship_type.build_ship_type_reference must be run first, for this exact window)",
+    )
+    parser.add_argument(
+        "--out-root",
+        default=str(IDENTITY_ANOMALIES_ROOT),
+        help="Root directory for window-partitioned identity-anomaly-events output",
     )
     parser.add_argument(
         "--links-out-path",
@@ -1220,12 +1244,18 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end) if args.end else start
-    events_path = build_identity_events(
-        start, end, in_root=Path(args.in_dir), out_path=Path(args.out_path), force=args.force
+    build_identity_events(
+        start,
+        end,
+        in_root=Path(args.in_dir),
+        ship_type_reference_root=Path(args.ship_type_reference_root),
+        out_root=Path(args.out_root),
+        force=args.force,
     )
-    build_vessel_links(
-        events_path=events_path, out_path=Path(args.links_out_path), force=args.force
-    )
+    # events_path defaults to IDENTITY_ANOMALIES_GLOB: vessel links are derived from every
+    # window's events accumulated so far, not just this run's, so a link spanning two windows
+    # (e.g. an mmsi's shared_imo edge discovered in an earlier window) is not missed.
+    build_vessel_links(out_path=Path(args.links_out_path), force=args.force)
 
 
 if __name__ == "__main__":

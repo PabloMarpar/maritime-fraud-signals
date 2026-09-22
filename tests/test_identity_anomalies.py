@@ -12,6 +12,7 @@ import duckdb
 import pytest
 
 from detect import identity_anomalies as ia
+from process import ship_type
 
 DAY = date(2024, 6, 1)
 DAY2 = date(2024, 6, 2)
@@ -227,9 +228,14 @@ def test_tanker_without_imo_is_flagged(tmp_path):
             _steady_rows(mmsi, [day], per_day=6, imo=None, ship_type="Tanker")
         )
     _write_partitions_by_day(in_root, rows_by_day)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY4, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY4, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY4, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     no_imo = [e for e in events if e["kind"] == "no_valid_imo"]
@@ -247,9 +253,14 @@ def test_tanker_with_too_few_static_messages_is_not_flagged(tmp_path):
     rows = _steady_rows(mmsi, [DAY, DAY4], per_day=1, imo=None, ship_type="Tanker")
     _write_clean_partition(in_root, DAY, [r for r in rows if r[1].date() == DAY])
     _write_clean_partition(in_root, DAY4, [r for r in rows if r[1].date() == DAY4])
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY4, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY4, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY4, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     assert not any(e["kind"] == "no_valid_imo" for e in events)
@@ -265,9 +276,14 @@ def test_sailing_vessel_without_imo_is_not_flagged(tmp_path):
         _write_clean_partition(
             in_root, day, _steady_rows(mmsi, [day], per_day=6, imo=None, ship_type="Sailing")
         )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY4, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY4, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY4, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     assert not any(e["kind"] == "no_valid_imo" for e in events)
@@ -282,9 +298,14 @@ def test_padded_and_cased_name_variants_normalize_to_one_value(tmp_path):
         (mmsi, _ts(DAY, 12), VALID_IMO_A, "  maersk ", "OXAB1", "Cargo", "Class A"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     assert not any(e["kind"] in ("name_change", "name_flapping") for e in events)
@@ -299,9 +320,14 @@ def test_name_change_clean_switch_emits_one_transition(tmp_path):
                  for h in range(4)]
     _write_clean_partition(in_root, DAY, rows_day1)
     _write_clean_partition(in_root, DAY2, rows_day2)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY2, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY2, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY2, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi and e["kind"] == "name_change"]
 
     assert len(events) == 1
@@ -323,9 +349,14 @@ def test_name_flapping_when_values_interleave(tmp_path):
         (mmsi, _ts(DAY, 18), VALID_IMO_A, "BRAVO", "OXAB3", "Cargo", "Class A"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     flapping = [e for e in events if e["kind"] == "name_flapping"]
@@ -342,9 +373,14 @@ def test_reused_mmsi_two_distinct_valid_imos(tmp_path):
                  for h in range(3)]
     _write_clean_partition(in_root, DAY, rows_day1)
     _write_clean_partition(in_root, DAY2, rows_day2)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY2, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY2, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY2, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi and e["kind"] == "reused_mmsi"]
 
     assert len(events) == 1
@@ -365,9 +401,14 @@ def test_two_mmsi_sharing_imo_emit_symmetric_pair_with_shared_knowable_at(tmp_pa
               for h in range(3)]
     _write_clean_partition(in_root, DAY, rows_a)
     _write_clean_partition(in_root, DAY2, rows_b)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY2, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY2, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY2, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["kind"] == "shared_imo"]
 
     assert len(events) == 2
@@ -387,9 +428,14 @@ def test_cross_mid_pair_flags_cross_mid_and_never_emits_a_flag_change_kind(tmp_p
     rows_no = [(mmsi_no, _ts(DAY, h), VALID_IMO_A, "SHIPNO", "LNNO", "Cargo", "Class A")
                for h in range(3)]
     _write_clean_partition(in_root, DAY, rows_dk + rows_no)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = _read_events(out_path)
     shared = [e for e in events if e["kind"] == "shared_imo"]
 
@@ -405,9 +451,14 @@ def test_three_mmsi_sharing_imo_yields_six_rows_three_pairs(tmp_path):
     for i, mmsi in enumerate(mmsis):
         rows.append((mmsi, _ts(DAY, i), VALID_IMO_A, f"SHIP{i}", f"OX{i}", "Cargo", "Class A"))
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["kind"] == "shared_imo"]
 
     assert len(events) == 6
@@ -424,10 +475,14 @@ def test_oversized_shared_group_is_skipped_with_warning(tmp_path, caplog):
         for i in range(n_mmsi)
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
     with caplog.at_level("WARNING"):
-        ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+        ship_type.build_ship_type_reference(
+            DAY, DAY, in_root=in_root, out_root=ship_type_root
+        )
+        out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
 
     assert any("MAX_IDENTITY_GROUP_SIZE" in record.message for record in caplog.records)
     events = [e for e in _read_events(out_path) if e["kind"] == "shared_imo"]
@@ -448,9 +503,14 @@ def test_group_size_gate_is_evaluated_as_of_each_pairs_own_knowable_at(tmp_path)
             in_root, day, [(mmsi, _ts(day, 0), VALID_IMO_C, f"SHIP{i}", f"OXY{i}", "Cargo",
                             "Class A")]
         )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(days[0], days[-1], in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        days[0], days[-1], in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(days[0], days[-1], in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["shared_value"] == VALID_IMO_C]
 
     # The pair formed by the first two members (group size 2 at that point) must survive.
@@ -470,9 +530,14 @@ def test_shared_identity_with_different_imos_emits_only_shared_identity(tmp_path
     ]
     _write_clean_partition(in_root, DAY, [rows[0]])
     _write_clean_partition(in_root, DAY2, [rows[1]])
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY2, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY2, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY2, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] in (mmsi_a, mmsi_b)]
 
     assert not any(e["kind"] == "shared_imo" for e in events)
@@ -488,9 +553,14 @@ def test_base_station_rows_are_excluded(tmp_path):
         (mmsi, _ts(DAY, 1), None, "NAMEB", "CALLB", "Undefined", "Base Station"),
     ]
     _write_clean_partition(in_root, DAY, rows)
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = [e for e in _read_events(out_path) if e["mmsi"] == mmsi]
 
     assert events == []
@@ -498,10 +568,10 @@ def test_base_station_rows_are_excluded(tmp_path):
 
 def test_build_identity_events_raises_when_no_partitions_exist(tmp_path):
     in_root = tmp_path / "clean" / "ais_dk"
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
 
     with pytest.raises(FileNotFoundError):
-        ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+        ia.build_identity_events(DAY, DAY, in_root=in_root, out_root=out_root)
 
 
 def test_build_identity_events_is_idempotent_by_default(tmp_path):
@@ -509,12 +579,20 @@ def test_build_identity_events_is_idempotent_by_default(tmp_path):
     _write_clean_partition(
         in_root, DAY, [(219000060, _ts(DAY, 0), VALID_IMO_A, "SHIP", "OX", "Cargo", "Class A")]
     )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    first = ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    first = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     first_mtime = first.stat().st_mtime_ns
 
-    second = ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    second = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
 
     assert second == first
     assert second.stat().st_mtime_ns == first_mtime
@@ -525,9 +603,14 @@ def test_build_identity_events_carries_provenance_columns(tmp_path):
     _write_clean_partition(
         in_root, DAY, [(219000061, _ts(DAY, 0), VALID_IMO_A, "SHIP", "OX", "Cargo", "Class A")]
     )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = _read_events(out_path)
 
     assert all(e["window_start"] == DAY for e in events) or events == []
@@ -552,9 +635,14 @@ def test_zero_event_run_writes_typed_empty_parquet(tmp_path):
         DAY,
         [(219000070, _ts(DAY, 0), VALID_IMO_A, "CLEANSHIP", "OXCLEAN", "Fishing", "Class A")],
     )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    out_path = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     events = _read_events(out_path)
 
     assert events == []
@@ -577,13 +665,21 @@ def test_force_rebuilds_even_when_output_exists(tmp_path):
     _write_clean_partition(
         in_root, DAY, [(219000080, _ts(DAY, 0), VALID_IMO_A, "SHIP", "OX", "Cargo", "Class A")]
     )
-    out_path = tmp_path / "detect" / "identity_anomalies.parquet"
+    out_root = tmp_path / "detect" / "identity_anomalies"
+    ship_type_root = tmp_path / "reference" / "ship_type"
 
-    first = ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    first = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root)
+
     first_mtime = first.stat().st_mtime_ns
 
     time.sleep(0.01)
-    second = ia.build_identity_events(DAY, DAY, in_root=in_root, out_path=out_path, force=True)
+    ship_type.build_ship_type_reference(
+        DAY, DAY, in_root=in_root, out_root=ship_type_root
+    )
+    second = ia.build_identity_events(DAY, DAY, in_root=in_root, ship_type_reference_root=ship_type_root, out_root=out_root, force=True)
 
     assert second.stat().st_mtime_ns != first_mtime
 
