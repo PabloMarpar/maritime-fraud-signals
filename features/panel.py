@@ -44,13 +44,20 @@ representative valid IMO, NULL if orphaned -- see "Representative IMO" below), `
 ``flag_country`` (``process.mid.country_of(mmsi)``, applied over the small distinct-mmsi roster,
 never the raw message table -- cosmetic/best-effort, see ``process.mid``'s own docstring: a missing
 MID mapping yields NULL, not an error), ``ship_type`` (the modal non-null ``ship_type`` broadcast
-by this mmsi across the window's clean partitions, resolved by one aggregate GROUP BY + row_number
-query, never a per-row Python scan), ``voyage_count`` (count of this mmsi's voyages in
+by this mmsi in this exact window's ``process.ship_type`` reference -- P3-4/A2 moved this off a
+direct clean-partition scan, see ``_build_ship_type`` -- resolved by one aggregate GROUP BY +
+row_number query, never a per-row Python scan), ``voyage_count`` (count of this mmsi's voyages in
 ``voyages_path`` within the window). **These are correct for the current single-month panel but are
 computed over the WHOLE window regardless of which month a row represents -- a real, confirmed,
 larger P4-3 blocker than the detector ``knowable_at`` proxy issue below (a future month's identity,
 including the representative ``imo`` itself, could silently determine a past month's label). Not
-fixed here; see ``docs/STATE.md``'s open questions before building a multi-month panel.**
+fixed here; see ``docs/STATE.md``'s open questions before building a multi-month panel. Since
+P3-4/A2, ``mmsi_imo_path``/``voyages_path`` default to a glob over every window built so far
+rather than one whole-range file -- ``voyage_count`` stays exactly as scoped as before (its own
+query filters to ``[window_start, window_end]``), but ``imo``/``is_orphaned``/``is_reused``/
+``total_message_count`` now see every accumulated window's identity facts, not just this one's --
+the SAME limitation, wider in scope. ``ship_type`` does NOT widen this way: its reference path is
+resolved to this call's own exact window, not a glob -- see build_panel's own docstring.**
 
 **Representative IMO for a reused mmsi.** ``process.identity`` already records, per mmsi, every
 distinct valid IMO it was ever paired with in the window, plus ``is_reused=true`` when there is more
@@ -244,16 +251,16 @@ from pathlib import Path
 
 import duckdb
 
-from detect.liveness import LIVENESS_PATH
-from process.identity import IDENTITY_PATH
+from detect.liveness import LIVENESS_ROOT
+from process.identity import IDENTITY_GLOB
 from process.mid import country_of
-from process.partitions import existing_partitions
+from process.partitions import partition_exists, window_partition_path
 from process.sanctions_match import MATCHES_PATH
-from process.tracks import VOYAGES_PATH
+from process.ship_type import SHIP_TYPE_ROOT
+from process.tracks import VOYAGES_GLOB
 
 logger = logging.getLogger(__name__)
 
-CLEAN_ROOT = Path("data/clean/ais_dk")
 DETECT_ROOT = Path("data/detect")
 PANEL_PATH = Path("data/processed/vessel_month_panel.parquet")
 
@@ -316,17 +323,6 @@ def _git_sha() -> str:
         return result.stdout.strip() or "unknown"
     except (OSError, subprocess.SubprocessError):
         return "unknown"
-
-
-def _partitions_union_sql(partitions: list[tuple[date, Path]], columns: str) -> str:
-    """UNION ALL of `SELECT {columns} FROM read_parquet(...)` over every partition.
-
-    Duplicated from detect.behaviour's own helper rather than imported -- every module in this
-    project owns its own copy of these small helpers, see detect.behaviour's module docstring.
-    """
-    return " UNION ALL ".join(
-        f"SELECT {columns} FROM read_parquet('{path.as_posix()}')" for _day, path in partitions
-    )
 
 
 def _months_spanned(window_start: date, window_end: date) -> list[tuple[int, int]]:
@@ -405,22 +401,25 @@ def _build_flag_country(con: duckdb.DuckDBPyConnection) -> None:
         con.executemany("INSERT INTO _flag_country VALUES (?, ?)", rows)
 
 
-def _build_ship_type(con: duckdb.DuckDBPyConnection, partitions: list[tuple[date, Path]]) -> None:
+def _build_ship_type(con: duckdb.DuckDBPyConnection, ship_type_reference_path: Path) -> None:
     """Materialize `_ship_type`: (mmsi, ship_type), the modal non-null ship_type per mmsi.
 
-    One aggregate GROUP BY + row_number query over mmsi/ship_type only -- never a per-row Python
-    scan. Produces an empty table (not an error) if `partitions` is empty, matching
+    Reads process.ship_type's pre-extracted reference instead of scanning clean partitions
+    directly (P3-4/A2's hard blocker) -- same resolution logic (mode by raw message count, no
+    text normalization, no type_of_mobile filter) as before, applied over that raw grain via
+    `sum(n_messages)` in place of the original `count(*)` over raw messages. The two are
+    equivalent because the reference's n_messages is itself just a prior GROUP BY count and
+    summation commutes with a regroup that ignores the extra type_of_mobile column -- see
+    process.ship_type's module docstring. An empty (but present) reference file -- e.g. no clean
+    data at all for this window -- produces an empty `_ship_type` table, not an error, matching
     detect.behaviour._build_matched_ports's own empty-input posture.
     """
-    if not partitions:
-        con.execute("CREATE OR REPLACE TEMP TABLE _ship_type (mmsi BIGINT, ship_type VARCHAR)")
-        return
     con.execute(
         "CREATE OR REPLACE TEMP TABLE _ship_type AS "
         "WITH counts AS ("
-        "  SELECT mmsi, ship_type, count(*) AS n FROM ("
-        + _partitions_union_sql(partitions, "mmsi, ship_type")
-        + "  ) WHERE ship_type IS NOT NULL AND ship_type != '' "
+        "  SELECT mmsi, ship_type, CAST(sum(n_messages) AS BIGINT) AS n "
+        f"  FROM read_parquet('{ship_type_reference_path.as_posix()}') "
+        "  WHERE ship_type IS NOT NULL AND ship_type != '' "
         "  GROUP BY mmsi, ship_type"
         "), ranked AS ("
         "  SELECT mmsi, ship_type, "
@@ -673,25 +672,38 @@ _PANEL_SELECT_SQL = (
 def build_panel(
     window_start: date,
     window_end: date,
-    mmsi_imo_path: Path = IDENTITY_PATH,
+    mmsi_imo_path: Path = IDENTITY_GLOB,
     sanctions_matches_path: Path = MATCHES_PATH,
-    voyages_path: Path = VOYAGES_PATH,
+    voyages_path: Path = VOYAGES_GLOB,
     detect_root: Path = DETECT_ROOT,
-    clean_root: Path = CLEAN_ROOT,
-    liveness_path: Path = LIVENESS_PATH,
+    ship_type_reference_root: Path = SHIP_TYPE_ROOT,
+    liveness_path: Path = LIVENESS_ROOT,
     out_path: Path = PANEL_PATH,
     force: bool = False,
 ) -> Path:
     """Build the vessel-month panel over [window_start, window_end] and write out_path.
 
     Idempotent: if out_path already exists, this is a no-op unless force=True. Returns out_path
-    either way. Raises FileNotFoundError naming what builds each missing input: no clean
-    partitions in range: process.clean.clean_range; missing mmsi_imo_path:
-    process.identity.resolve_range; missing sanctions_matches_path:
+    either way. Raises FileNotFoundError naming what builds each missing input: missing
+    mmsi_imo_path: process.identity.resolve_range; missing sanctions_matches_path:
     process.sanctions_match.match_sanctions; missing voyages_path: process.tracks.reconstruct_range;
-    missing any of the five detector tables under detect_root: their respective build_* function
+    missing ship_type_reference_root's window: process.ship_type.build_ship_type_reference, for
+    this exact [window_start, window_end]; missing any of the five detector tables under
+    detect_root: their respective build_* function
     (detect.gaps/spoofing/sts/identity_anomalies/behaviour); missing liveness_path:
     detect.liveness.build_liveness (P4-0's exposure source, see module docstring).
+
+    ``mmsi_imo_path``/``voyages_path``/``liveness_path`` default to globs over every window built
+    so far (P3-4/A2); ``voyages_path``/``liveness_path`` are safe to accumulate this way because
+    their own aggregate queries already filter to this window/month (see _build_voyage_counts,
+    and _exposure_agg's join on year_month), but ``mmsi_imo_path`` has no such filter -- seeing
+    every window's identity facts, not just this one's, is the SAME already-documented "whole
+    window, no month bound" limitation the module docstring's "Static/identity features" section
+    describes, now widened from "the one window this panel was built from" to "every window ever
+    built" until P4-3 addresses it. ``ship_type_reference_root`` is NOT a glob default, unlike the
+    other four detector-table paths below -- it is resolved to this call's own exact window (same
+    posture as ``detect.identity_anomalies.build_identity_events``), so this one static feature
+    does not silently widen beyond what the module docstring already documents.
 
     Opens exactly one DuckDB connection and reuses it across the whole build.
     """
@@ -701,7 +713,7 @@ def build_panel(
         )
         return out_path
 
-    if not mmsi_imo_path.exists():
+    if not partition_exists(mmsi_imo_path):
         raise FileNotFoundError(
             f"No identity table at {mmsi_imo_path}; run process.identity.resolve_range first"
         )
@@ -710,19 +722,25 @@ def build_panel(
             f"No sanctions matches table at {sanctions_matches_path}; run "
             "process.sanctions_match.match_sanctions first"
         )
-    if not voyages_path.exists():
+    if not partition_exists(voyages_path):
         raise FileNotFoundError(
             f"No voyages table at {voyages_path}; run process.tracks.reconstruct_range first"
         )
-    if not liveness_path.exists():
+    if not partition_exists(liveness_path):
         raise FileNotFoundError(
             f"No liveness table at {liveness_path}; run detect.liveness.build_liveness first"
         )
+    ship_type_reference_path = window_partition_path(window_start, window_end, ship_type_reference_root)
+    if not ship_type_reference_path.exists():
+        raise FileNotFoundError(
+            f"No ship_type reference at {ship_type_reference_path}; run "
+            "process.ship_type.build_ship_type_reference first, for this exact window"
+        )
     gaps_path = detect_root / "gaps.parquet"
-    spoofing_path = detect_root / "spoofing.parquet"
-    sts_path = detect_root / "sts.parquet"
-    identity_anomalies_path = detect_root / "identity_anomalies.parquet"
-    behaviour_path = detect_root / "behaviour.parquet"
+    spoofing_path = detect_root / "spoofing" / "window=*" / "part-0.parquet"
+    sts_path = detect_root / "sts" / "window=*" / "part-0.parquet"
+    identity_anomalies_path = detect_root / "identity_anomalies" / "window=*" / "part-0.parquet"
+    behaviour_path = detect_root / "behaviour" / "window=*" / "part-0.parquet"
     for path, builder in (
         (gaps_path, "detect.gaps.build_gaps"),
         (spoofing_path, "detect.spoofing.build_spoofing_events"),
@@ -730,22 +748,15 @@ def build_panel(
         (identity_anomalies_path, "detect.identity_anomalies.build_identity_anomalies"),
         (behaviour_path, "detect.behaviour.build_behaviour_events"),
     ):
-        if not path.exists():
+        if not partition_exists(path):
             raise FileNotFoundError(f"No detector table at {path}; run {builder} first")
-
-    partitions = existing_partitions(window_start, window_end, clean_root)
-    if not partitions:
-        raise FileNotFoundError(
-            f"No clean partitions found for {window_start.isoformat()}..{window_end.isoformat()} "
-            f"under {clean_root}; run process.clean.clean_range first"
-        )
 
     con = duckdb.connect()
     try:
         _build_year_months(con, window_start, window_end)
         _build_roster(con, mmsi_imo_path)
         _build_flag_country(con)
-        _build_ship_type(con, partitions)
+        _build_ship_type(con, ship_type_reference_path)
         _build_voyage_counts(con, voyages_path, window_start, window_end)
         _build_exposure(con, liveness_path)
         _build_panel_base(con)
@@ -811,7 +822,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start", required=True, help="First day, YYYY-MM-DD")
     parser.add_argument("--end", help="Last day, YYYY-MM-DD (default: same as --start)")
     parser.add_argument(
-        "--mmsi-imo-path", default=str(IDENTITY_PATH), help="Path to the mmsi<->imo identity table"
+        "--mmsi-imo-path",
+        default=str(IDENTITY_GLOB),
+        help="Path or glob for the mmsi<->imo identity table(s)",
     )
     parser.add_argument(
         "--sanctions-matches-path",
@@ -819,16 +832,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to the sanctions matches table",
     )
     parser.add_argument(
-        "--voyages-path", default=str(VOYAGES_PATH), help="Path to the voyages table"
+        "--voyages-path",
+        default=str(VOYAGES_GLOB),
+        help="Path or glob for the voyages table(s)",
     )
     parser.add_argument(
         "--detect-root", default=str(DETECT_ROOT), help="Root of the five detector tables"
     )
     parser.add_argument(
-        "--clean-root", default=str(CLEAN_ROOT), help="Root of the clean Parquet partitions"
+        "--ship-type-reference-root",
+        default=str(SHIP_TYPE_ROOT),
+        help="Root directory for the window-partitioned ship_type reference "
+        "(process.ship_type.build_ship_type_reference must be run first, for this exact window)",
     )
     parser.add_argument(
-        "--liveness-path", default=str(LIVENESS_PATH), help="Path to the liveness table"
+        "--liveness-path",
+        default=str(LIVENESS_ROOT),
+        help="Path to the liveness table (directory of day-partitions, or a legacy whole-range file)",
     )
     parser.add_argument("--out-path", default=str(PANEL_PATH), help="Output path for the panel")
     parser.add_argument(
@@ -849,7 +869,7 @@ def main(argv: list[str] | None = None) -> None:
         sanctions_matches_path=Path(args.sanctions_matches_path),
         voyages_path=Path(args.voyages_path),
         detect_root=Path(args.detect_root),
-        clean_root=Path(args.clean_root),
+        ship_type_reference_root=Path(args.ship_type_reference_root),
         liveness_path=Path(args.liveness_path),
         out_path=Path(args.out_path),
         force=args.force,

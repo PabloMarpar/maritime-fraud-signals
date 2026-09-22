@@ -11,6 +11,7 @@ import duckdb
 import pytest
 
 from features import panel
+from process.partitions import window_partition_path
 
 WINDOW_START = date(2024, 6, 1)
 WINDOW_END = date(2024, 6, 30)
@@ -168,17 +169,23 @@ def _write_liveness(path: Path, rows: list[tuple]) -> None:
         con.close()
 
 
-def _write_clean_partition(root: Path, day: date, rows: list[tuple]) -> None:
-    """rows: (mmsi, ship_type)."""
-    partition_dir = root / f"date={day.isoformat()}"
-    partition_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = partition_dir / "part-0.parquet"
+def _write_ship_type_reference(path: Path, rows: list[tuple]) -> None:
+    """rows: (mmsi, ship_type). Real grain also carries type_of_mobile/n_messages (P3-4/A2's
+    process.ship_type), but _build_ship_type doesn't filter by type_of_mobile, so a placeholder
+    value and n_messages=1 per row is enough to exercise the same mode-by-count resolution --
+    repeat a row to simulate a higher count, matching the old direct-clean-partition-scan
+    fixture's convention.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     try:
-        con.execute("CREATE TABLE clean (mmsi BIGINT, ship_type VARCHAR)")
+        con.execute(
+            "CREATE TABLE t (mmsi BIGINT, ship_type VARCHAR, type_of_mobile VARCHAR, "
+            "n_messages BIGINT)"
+        )
         if rows:
-            con.executemany("INSERT INTO clean VALUES (?, ?)", rows)
-        con.execute(f"COPY clean TO '{parquet_path.as_posix()}' (FORMAT PARQUET)")
+            con.executemany("INSERT INTO t VALUES (?, ?, 'Class A', 1)", rows)
+        con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
 
@@ -191,7 +198,7 @@ class _Paths:
         self.sanctions_matches = tmp_path / "identity" / "sanctions_matches.parquet"
         self.voyages = tmp_path / "tracks" / "voyages.parquet"
         self.detect_root = tmp_path / "detect"
-        self.clean_root = tmp_path / "clean" / "ais_dk"
+        self.ship_type_root = tmp_path / "reference" / "ship_type"
         self.liveness = tmp_path / "coverage" / "liveness.parquet"
         self.out_path = tmp_path / "processed" / "vessel_month_panel.parquet"
 
@@ -199,21 +206,33 @@ class _Paths:
     def gaps(self) -> Path:
         return self.detect_root / "gaps.parquet"
 
+    # spoofing/sts/identity_anomalies/behaviour are window-partitioned as of P3-4/A2, and
+    # build_panel reads them via a `window=*` glob under detect_root -- any concrete window
+    # directory matches that glob, so tests write to this fixed one (the same window every test
+    # in this file uses).
     @property
     def spoofing(self) -> Path:
-        return self.detect_root / "spoofing.parquet"
+        return window_partition_path(WINDOW_START, WINDOW_END, self.detect_root / "spoofing")
 
     @property
     def sts(self) -> Path:
-        return self.detect_root / "sts.parquet"
+        return window_partition_path(WINDOW_START, WINDOW_END, self.detect_root / "sts")
 
     @property
     def identity_anomalies(self) -> Path:
-        return self.detect_root / "identity_anomalies.parquet"
+        return window_partition_path(
+            WINDOW_START, WINDOW_END, self.detect_root / "identity_anomalies"
+        )
 
     @property
     def behaviour(self) -> Path:
-        return self.detect_root / "behaviour.parquet"
+        return window_partition_path(WINDOW_START, WINDOW_END, self.detect_root / "behaviour")
+
+    @property
+    def ship_type(self) -> Path:
+        """Exact single-window path -- build_panel resolves this itself, not a glob, so the
+        fixture must land at exactly the path it will compute."""
+        return window_partition_path(WINDOW_START, WINDOW_END, self.ship_type_root)
 
 
 def _build_minimal_inputs(
@@ -226,7 +245,7 @@ def _build_minimal_inputs(
     sts_rows: list[tuple] | None = None,
     identity_rows: list[tuple] | None = None,
     behaviour_rows: list[tuple] | None = None,
-    clean_rows: list[tuple] | None = None,
+    ship_type_rows: list[tuple] | None = None,
     liveness_rows: list[tuple] | None = None,
 ) -> None:
     _write_mmsi_imo(p.mmsi_imo, mmsi_imo_rows)
@@ -237,7 +256,7 @@ def _build_minimal_inputs(
     _write_sts(p.sts, sts_rows or [])
     _write_identity_anomalies(p.identity_anomalies, identity_rows or [])
     _write_behaviour(p.behaviour, behaviour_rows or [])
-    _write_clean_partition(p.clean_root, WINDOW_START, clean_rows or [])
+    _write_ship_type_reference(p.ship_type, ship_type_rows or [])
     _write_liveness(p.liveness, liveness_rows or [])
 
 
@@ -261,7 +280,7 @@ def _run(p: _Paths, force: bool = False) -> Path:
         sanctions_matches_path=p.sanctions_matches,
         voyages_path=p.voyages,
         detect_root=p.detect_root,
-        clean_root=p.clean_root,
+        ship_type_reference_root=p.ship_type_root,
         liveness_path=p.liveness,
         out_path=p.out_path,
         force=force,
@@ -362,7 +381,7 @@ def test_vessel_with_events_across_all_detectors_aggregates_correctly(tmp_path):
         behaviour_rows=[
             (mmsi, "destination_course_mismatch", _ts(date(2024, 6, 12))),
         ],
-        clean_rows=[(mmsi, "Tanker"), (mmsi, "Tanker"), (mmsi, "Cargo")],
+        ship_type_rows=[(mmsi, "Tanker"), (mmsi, "Tanker"), (mmsi, "Cargo")],
         # 4 distinct cell_hour values spanning 3 distinct dates -> n_observed_hours=4,
         # n_observed_days=3.
         liveness_rows=[
@@ -675,6 +694,7 @@ def test_raises_when_a_detector_table_missing(tmp_path):
     _write_sanctions_matches(p.sanctions_matches, [])
     _write_voyages(p.voyages, [])
     _write_liveness(p.liveness, [])
+    _write_ship_type_reference(p.ship_type, [])
     _write_gaps(p.gaps, [])
     _write_spoofing(p.spoofing, [])
     _write_sts(p.sts, [])
@@ -720,18 +740,16 @@ def test_label_columns_are_the_only_ones_naming_sanctions(tmp_path):
     assert {"n_observed_hours", "n_observed_days"} <= non_label_columns
 
 
-def test_raises_when_no_clean_partitions_in_range(tmp_path):
+def test_raises_when_ship_type_reference_missing(tmp_path):
+    """P3-4/A2's hard-blocker fix: _build_ship_type now requires process.ship_type's reference
+    for this exact window, not a direct clean-partition scan."""
     p = _Paths(tmp_path)
     _write_mmsi_imo(
         p.mmsi_imo, [(219000016, VALID_IMO_A, 5, date(2024, 6, 1), date(2024, 6, 5), False, False)]
     )
     _write_sanctions_matches(p.sanctions_matches, [])
     _write_voyages(p.voyages, [])
-    _write_gaps(p.gaps, [])
-    _write_spoofing(p.spoofing, [])
-    _write_sts(p.sts, [])
-    _write_identity_anomalies(p.identity_anomalies, [])
-    _write_behaviour(p.behaviour, [])
-    # p.clean_root deliberately never populated.
-    with pytest.raises(FileNotFoundError):
+    _write_liveness(p.liveness, [])
+    # p.ship_type deliberately never written.
+    with pytest.raises(FileNotFoundError, match="ship_type"):
         _run(p)
