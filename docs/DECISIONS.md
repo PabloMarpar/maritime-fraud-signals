@@ -1385,3 +1385,40 @@ _2026-09-23_ (P4-1: the naive baseline, unblocked)
   P4-2/P4-3 cannot yet do a real temporal train/test split — R1/R2's in-sample reporting is honest
   for unfitted rules, but this is the largest real constraint facing P4-2, and belongs in its own
   task's scoping, not fixed retroactively in P4-1.
+
+_2026-09-23_ (second real window: the DMA archive is not "2006 onwards" as documented)
+
+- **`docs/DATA_SOURCES.md` claimed daily DMA files "from 2006 onwards"; the bucket does not
+  actually serve that range right now.** Discovered while scoping P4-2/P4-3's documented
+  prerequisite (a second real window, for an honest temporal train/test split — see P4-1's close
+  above). Before picking dates, probed `https://s3.eu-central-1.amazonaws.com/aisdata.ais.dk/
+  {year}/aisdk-{day}.{zip,csv}` with per-day HEAD requests spanning 2020-01-01..2026-09-20.
+  Result: 200 for every date from **2024-03-01 through 2025-02-26 inclusive**, 404 everywhere
+  else tested — all of 2023, January/February 2024, and every date from 2025-03-01 onward,
+  including recent 2026 dates. The already-built 2024-06 window sits inside this range, so
+  nothing already shipped is affected, but the "2006 onwards" claim (from the module docstring
+  and `docs/DATA_SOURCES.md`, based on the archive's documented naming scheme, not verified
+  end-to-end) is wrong for what is actually reachable today. Corrected in
+  `docs/DATA_SOURCES.md`.
+- **Read as a fixed ~12-month snapshot currently exposed by the bucket, not a rolling
+  most-recent-N-months window** — the available range ends 2025-02-26, over a year and a half
+  before today (2026-09-23), which rules out "keeps the trailing 12 months relative to now" as
+  the mechanism. Not investigated further (out of scope — DMA gives no public retention policy
+  to check this against), but worth remembering: a future session extending the range further
+  must re-probe rather than trust either the old "2006 onwards" claim or this snapshot's own
+  boundaries, since both could be wrong by the time anyone reads this.
+- **Consequence for `pipeline.prune`'s A0.4 re-download drill (P3-4/A5, 2026-09-22):** that drill
+  confirmed re-download stability for 2024-06-15, which is still inside today's reachable range,
+  so the drill's PASS verdict stands. But the drill's implicit assumption — that any previously
+  verified day can always be re-downloaded later — does not hold in general if this bucket
+  rotates older content out over time. Not a regression of anything already built; a caveat for
+  whoever next relies on re-download as a safety net for a day this session or a future one
+  eventually finds has aged out of range.
+- **Second window chosen: 2024-11-01..2024-11-30**, same 30-day size as the existing June window
+  for direct comparability. Picked to sit comfortably inside the confirmed range including its
+  30-day lead-in (`pipeline.window`'s liveness baseline reaches back to 2024-10-02, also
+  confirmed live), ~5 months from June 2024 for both a genuine temporal separation and seasonal
+  variety (autumn Baltic vs. summer), and far enough from both range edges (2024-03-01,
+  2025-02-26) to leave margin if the boundary turns out to be less exact than the single day-by-
+  day probe suggests. Built via the existing `pipeline.window` orchestrator (P3-4/A4) with no
+  code changes — see `docs/STATE.md` for the real run's numbers.

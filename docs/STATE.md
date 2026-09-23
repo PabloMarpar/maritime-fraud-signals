@@ -217,16 +217,64 @@ _Last updated: 2026-09-23_
   also lists what was deliberately left as documented limitation rather than fixed. 45 new tests
   (474 total), `ruff` clean.
 
+## In progress
+
+**Second real window (2024-11-01..2024-11-30), the documented P4-2/P4-3 prerequisite -- started
+2026-09-23, NOT finished, stopped cleanly mid-run for a planned shutdown.** Real findings so far:
+
+- **`docs/DATA_SOURCES.md`'s "2006 onwards" claim for the DMA archive was wrong.** Per-day HEAD
+  probing (zip and csv) confirmed the bucket currently only serves **2024-03-01..2025-02-26**;
+  everything outside that -- all of 2023, Jan/Feb 2024, anything from 2025-03-01 on -- 404s. The
+  already-built June window is safely inside this range. Corrected in `docs/DATA_SOURCES.md`; full
+  detail and the re-download-drill caveat this creates for `pipeline.prune` in `docs/DECISIONS.md`'s
+  2026-09-23 entry.
+- **Chose 2024-11-01..2024-11-30**: same size as June, ~5 months separated (temporal split +
+  seasonal variety), safely inside the confirmed range including its 30-day lead-in.
+- **Real bug found and fixed: `ingest/dma.py` had no retry on a transient network failure**
+  (`httpx.ReadTimeout`/`ConnectError`), confirmed blocking real progress -- a naive whole-pipeline
+  retry loop only advanced ~1 day per attempt against this session's flaky connection. Fixed with
+  an in-place per-URL retry (`MAX_FETCH_ATTEMPTS=5`, exponential backoff from 2s), scoped to
+  `httpx.TransportError` only (a real 404 still falls through to the next filename pattern
+  immediately, no retry). 2 new tests (478 total), `ruff` clean. This was the documented open
+  question in this file's older revision -- now resolved, not just noted.
+- **Operational lesson, not a code bug: an earlier background retry loop was left running
+  unsupervised past when its terminal session moved on, and raced a later attempt against the same
+  `data/` tree for ~30+ minutes before being caught** (surfaced as Windows file-lock errors: "file
+  already open in another process"). Corrupted exactly one clean partition (`2024-10-23`, truncated
+  parquet) via concurrent writes; every other partition (10-02..10-22, all of November) validated
+  clean via a real DuckDB read + row-count pass. Deleted and left to rebuild. **Lesson for next
+  time: never launch a new background run over the same `data/` tree without confirming the
+  previous one has actually exited**, not just that its own wrapper reported done.
+- **Windows Defender's real-time protection is enabled with no exclusion for this project's `data/`
+  folder** -- plausible contributor to both the file-lock incident above and `check_on_land` running
+  well over 2x slower than the real June baseline (94.3 min documented in `docs/DECISIONS.md`,
+  >3.5h and still running here). User asked for a Defender exclusion on `data/`; the auto-mode
+  classifier blocked `Add-MpPreference` as a system security change requiring the user to run it
+  directly (not yet done as of this close).
+- **State on disk as of this close**: all 60 days (30-day lead-in 2024-10-02..2024-10-31 + the
+  2024-11 window itself) downloaded, cleaned, and validated; thin tracks, ship_type reference,
+  voyages (tracks), identity resolution, and the anchorage mask all built successfully for the
+  window. `detect.spoofing`'s `impossible_speed` check finished (2,396 events); `on_land` was
+  killed mid-run for a planned machine shutdown -- confirmed clean stop, no partial output file
+  was ever written (the four spoofing checks only get written to disk together, at the end), no
+  `verified_at` was recorded for any November day (verification never ran), no stray temp files
+  left behind. **Nothing built so far needs to be redone** -- only `on_land` onward (`synthetic_circle`,
+  `simultaneous_position`, then `sts`/`behaviour`/`identity_anomalies`, then `_verify_window` and
+  the manifest fingerprint) remains.
+- **To resume:** `python -m pipeline.window --start 2024-11-01 --end 2024-11-30` (idempotent --
+  skips everything already built above). Consider first confirming the Defender exclusion got
+  applied, and killing any stray `python.exe` before relaunching (see the operational lesson
+  above).
+
 ## Next up
 
-**P4-2 (Isolation Forest on the vessel-month features)** -- `model/baseline.py`'s R1/R2 (compare
-against their `precision` column, never `precision_at_20` -- see `CLAUDE.md`) and
-`baseline_scores.parquet`'s `tier` column are the target to beat; population must stay restricted
-to `imo IS NOT NULL` per `features.panel`'s hard blocker (see P3-3 above). **Real constraint found
-during P4-1's `analyst-review` pass: this project has only one real window (2024-06), so no
-temporal train/test split is possible yet.** R1/R2's in-sample reporting was fine for unfitted
-rules; P4-2/P4-3 cannot be honestly evaluated without a second window -- scope that in, not around,
-before training anything.
+**Finish the second window (see "In progress" above), then P4-2 (Isolation Forest on the
+vessel-month features)** -- `model/baseline.py`'s R1/R2 (compare against their `precision` column,
+never `precision_at_20` -- see `CLAUDE.md`) and `baseline_scores.parquet`'s `tier` column are the
+target to beat; population must stay restricted to `imo IS NOT NULL` per `features.panel`'s hard
+blocker (see P3-3 above). Once the second window verifies, P4-2/P4-3 can finally do an honest
+temporal train/test split (train on the earlier window, evaluate on the later one) instead of the
+in-sample-only reporting R1/R2 were limited to.
 
 ## Blocked
 

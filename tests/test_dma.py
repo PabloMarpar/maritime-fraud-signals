@@ -193,6 +193,54 @@ def test_download_day_raises_when_nothing_found(tmp_path):
         dma.download_day(DAY, out_root=out_root, client=client)
 
 
+def test_fetch_day_retries_transient_error_then_succeeds(tmp_path, monkeypatch):
+    """A transient network failure (ReadTimeout, ConnectError, ...) must be retried in place,
+    not treated like a 404 or allowed to abort the whole day -- see ingest.dma's module
+    docstring point 3, confirmed real against the live DMA endpoint."""
+    monkeypatch.setattr(dma.time, "sleep", lambda seconds: None)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path.endswith(".csv"):
+            return httpx.Response(404)
+        if len([c for c in calls if c.endswith(".zip")]) < 3:
+            raise httpx.ReadTimeout("simulated transient failure", request=request)
+        return httpx.Response(200, content=_zip_bytes(SAMPLE_CSV))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out_root = tmp_path / "ais_dk"
+
+    parquet_path = dma.download_day(DAY, out_root=out_root, client=client)
+
+    assert parquet_path.exists()
+    zip_calls = [c for c in calls if c.endswith(".zip")]
+    assert len(zip_calls) == 3, "should retry the same (.zip) url, not fall through to .csv"
+
+
+def test_fetch_day_gives_up_after_max_attempts(tmp_path, monkeypatch):
+    """Retries must not be infinite -- a genuinely dead host still surfaces as FileNotFoundError,
+    chaining the last transient error, once both patterns are exhausted."""
+    monkeypatch.setattr(dma.time, "sleep", lambda seconds: None)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise httpx.ConnectError("simulated dead host", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out_root = tmp_path / "ais_dk"
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        dma.download_day(DAY, out_root=out_root, client=client)
+
+    assert isinstance(excinfo.value.__cause__, httpx.ConnectError)
+    zip_calls = [c for c in calls if c.endswith(".zip")]
+    csv_calls = [c for c in calls if c.endswith(".csv")]
+    assert len(zip_calls) == dma.MAX_FETCH_ATTEMPTS
+    assert len(csv_calls) == dma.MAX_FETCH_ATTEMPTS
+
+
 def test_download_range_covers_every_day(tmp_path):
     calls: list[str] = []
     out_root = tmp_path / "ais_dk"

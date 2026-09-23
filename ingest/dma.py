@@ -22,6 +22,16 @@ Two quirks of this source drive the design below:
    archives, and bare CSV has been used in some periods, so ``_fetch_day``
    still tries both known patterns and ``_extract_csv`` sniffs the downloaded
    bytes (zip magic number) rather than trusting the key's extension.
+3. **The endpoint routinely cuts a transfer mid-stream.** Confirmed twice
+   independently: the A0.4 re-download drill (P3-4/A5, 2026-09-22) needed up
+   to 4 attempts for one file even at a 300s client timeout, and building a
+   second real window (2026-09-23) hit the same thing repeatedly across a
+   60-day range (``httpx.ReadTimeout``, occasionally ``httpx.ConnectError``
+   from a DNS lookup failure). ``_fetch_day`` retries a transient
+   ``httpx.TransportError`` in place, per URL, with exponential backoff
+   (:data:`MAX_FETCH_ATTEMPTS`, :data:`RETRY_BACKOFF_BASE_SECONDS`) before
+   moving on to the next filename pattern or giving up -- a real 404 is not
+   retried, only a network-level failure is.
 """
 
 from __future__ import annotations
@@ -30,6 +40,7 @@ import argparse
 import logging
 import shutil
 import tempfile
+import time
 import zipfile
 from collections.abc import Iterator
 from datetime import date, timedelta
@@ -53,6 +64,12 @@ RAW_ROOT = Path("data/raw/ais_dk")
 
 ZIP_MAGIC = b"PK\x03\x04"
 
+# See module docstring point 3. 5 attempts, doubling from 2s, tops out at
+# ~30s of extra waiting per URL before moving on -- enough to smooth over the
+# transient blips observed in practice without masking a genuinely dead host.
+MAX_FETCH_ATTEMPTS = 5
+RETRY_BACKOFF_BASE_SECONDS = 2.0
+
 
 def _daterange(start: date, end: date) -> Iterator[date]:
     """Yield each date from start to end, inclusive."""
@@ -73,7 +90,10 @@ def _fetch_day(day: date, client: httpx.Client, dest_dir: Path) -> Path:
     Tries each entry in FILENAME_PATTERNS in turn and returns the local path
     to whichever one exists. Streams the response body in chunks rather than
     buffering it in memory, since a day of AIS data can run into the
-    hundreds of megabytes.
+    hundreds of megabytes. A transient network failure (see module docstring
+    point 3) is retried in place, per URL, before moving on to the next
+    pattern -- a real 404 is not retried, it just means "try the next
+    pattern" like before.
     """
     last_error: Exception | None = None
     for pattern in FILENAME_PATTERNS:
@@ -81,18 +101,36 @@ def _fetch_day(day: date, client: httpx.Client, dest_dir: Path) -> Path:
         filename = Path(key).name
         url = f"{BASE_URL}/{key}"
         local_path = dest_dir / filename
-        try:
-            with client.stream("GET", url) as response:
-                if response.status_code == 404:
-                    continue
-                response.raise_for_status()
-                with open(local_path, "wb") as fh:
-                    fh.writelines(response.iter_bytes())
-            logger.info("Downloaded %s", url)
-            return local_path
-        except httpx.HTTPStatusError as exc:
-            last_error = exc
-            continue
+        for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+            try:
+                with client.stream("GET", url) as response:
+                    if response.status_code == 404:
+                        break  # not found under this pattern -- try the next one, no retry
+                    response.raise_for_status()
+                    with open(local_path, "wb") as fh:
+                        fh.writelines(response.iter_bytes())
+                logger.info("Downloaded %s", url)
+                return local_path
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                break  # a real HTTP error (e.g. 403/500) -- try the next pattern, not a retry
+            except httpx.TransportError as exc:
+                last_error = exc
+                if attempt == MAX_FETCH_ATTEMPTS:
+                    logger.warning(
+                        "Giving up on %s after %d attempts (%s)", url, MAX_FETCH_ATTEMPTS, exc
+                    )
+                    break  # exhausted retries for this pattern -- try the next one, if any
+                backoff = RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                logger.warning(
+                    "Transient error fetching %s (attempt %d/%d): %s -- retrying in %.0fs",
+                    url,
+                    attempt,
+                    MAX_FETCH_ATTEMPTS,
+                    exc,
+                    backoff,
+                )
+                time.sleep(backoff)
     raise FileNotFoundError(
         f"No file found for {day.isoformat()} under any of "
         f"{FILENAME_PATTERNS} at {BASE_URL}"

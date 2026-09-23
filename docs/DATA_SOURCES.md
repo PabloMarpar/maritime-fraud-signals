@@ -7,8 +7,16 @@ All sources are open, free and publicly documented. Verified reachable on 2026-0
 ### Danish Maritime Authority — historical
 - **URL:** `https://s3.eu-central-1.amazonaws.com/aisdata.ais.dk/{year}/aisdk-{YYYY-MM-DD}.zip`
   (path-style S3 URL — see quirk below). Confirmed live 2026-09-16.
-- **Contents:** daily files, `{year}/aisdk-YYYY-MM-DD.zip`, from 2006 onwards (older years may ship
-  monthly archives instead of daily — not yet needed, revisit when Phase 3-4 widens the range).
+- **Contents:** daily files, `{year}/aisdk-YYYY-MM-DD.zip`. The archive's own documentation and
+  historical file naming suggest coverage from 2006 onwards, but **what the bucket actually
+  serves right now is a fixed ~12-month range, confirmed 2026-09-23 by a per-day HEAD request
+  (both `.zip` and `.csv` patterns) across 2020-2026: every date resolves 200 from 2024-03-01
+  through 2025-02-26 inclusive, and 404 everywhere outside that range** — including all of 2023,
+  January/February 2024, and everything from 2025-03-01 onwards. This is not "years of depth";
+  do not plan a window outside `[2024-03-01, 2025-02-26]` without re-probing first, since older
+  and newer periods are not currently reachable regardless of what the bucket's naming scheme
+  implies. The already-built 2024-06 window falls inside this range and is unaffected. See
+  `docs/DECISIONS.md`'s 2026-09-23 entry.
 - **Access:** direct download, no registration.
 - **Quirk (superseded, kept for history):** the legacy host `http://web.ais.dk/aisdata/` documented
   here previously no longer answers on port 80 from any network tested, and its HTTPS listener
