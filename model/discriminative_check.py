@@ -90,6 +90,7 @@ from scipy.stats import mannwhitneyu
 from sklearn.metrics import roc_auc_score
 
 from features.panel import PANEL_PATH, RATE_BASE_COLUMNS
+from model.evaluation import bootstrap_auc_ci, load_population
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,6 @@ SUMMARY_PATH = Path("outputs/discriminative_check_summary.txt")
 N_EXPOSURE_BUCKETS = 5
 N_BOOTSTRAP = 2000
 BOOTSTRAP_SEED = 0
-CI_LOW_PCT = 2.5
-CI_HIGH_PCT = 97.5
 MIN_GROUP_SIZE_FOR_VERDICT = 5
 
 
@@ -162,36 +161,6 @@ class FeatureResult:
     verdict: str
 
 
-def _bootstrap_auc_ci(
-    pos: np.ndarray, neg: np.ndarray, n_bootstrap: int, rng: np.random.Generator
-) -> tuple[float, float]:
-    """Stratified bootstrap 95% CI on the univariate AUC: each resample redraws n_pos positives
-    and n_neg negatives independently (with replacement), so every resample keeps the real class
-    balance -- an unstratified resample of the pooled data could occasionally draw all-one-class
-    and silently bias the interval.
-    """
-    n_pos, n_neg = len(pos), len(neg)
-    labels = np.concatenate([np.ones(n_pos), np.zeros(n_neg)])
-    aucs = np.empty(n_bootstrap)
-    for i in range(n_bootstrap):
-        pos_sample = rng.choice(pos, size=n_pos, replace=True)
-        neg_sample = rng.choice(neg, size=n_neg, replace=True)
-        values = np.concatenate([pos_sample, neg_sample])
-        try:
-            aucs[i] = roc_auc_score(labels, values)
-        except ValueError:
-            # Every value identical across the whole resample -- roc_auc_score has nothing to
-            # rank. Rare at real sample sizes; dropped rather than treated as a fabricated 0.5.
-            aucs[i] = np.nan
-    aucs = aucs[~np.isnan(aucs)]
-    if len(aucs) == 0:
-        return (float("nan"), float("nan"))
-    return (
-        float(np.percentile(aucs, CI_LOW_PCT)),
-        float(np.percentile(aucs, CI_HIGH_PCT)),
-    )
-
-
 def _evaluate_feature(
     feature: str,
     matched: bool,
@@ -233,7 +202,7 @@ def _evaluate_feature(
     labels = np.concatenate([np.ones(n_pos), np.zeros(n_neg)])
     values = np.concatenate([pos, neg])
     auc = float(roc_auc_score(labels, values))
-    ci_low, ci_high = _bootstrap_auc_ci(pos, neg, n_bootstrap, rng)
+    ci_low, ci_high = bootstrap_auc_ci(pos, neg, n_bootstrap, rng)
     _, p_value = mannwhitneyu(pos, neg, alternative="two-sided")
 
     if ci_low > 0.5:
@@ -365,26 +334,14 @@ def build_discriminative_check(
 
     con = duckdb.connect()
     try:
+        window_start, window_end = load_population(con, panel_path, table_name="_population_base")
         con.execute(
             "CREATE OR REPLACE TEMP TABLE _population AS "
             "SELECT *, COALESCE(ship_type, '__unknown__') AS match_ship_type, "
             "ntile(?) OVER (ORDER BY n_observed_days) AS exposure_bucket "
-            f"FROM read_parquet('{panel_path.as_posix()}') "
-            "WHERE imo IS NOT NULL AND NOT label_is_sanctioned_as_of_window_end",
+            "FROM _population_base",
             [n_exposure_buckets],
         )
-
-        window_rows = con.execute(
-            "SELECT DISTINCT window_start, window_end FROM _population"
-        ).fetchall()
-        if len(window_rows) != 1:
-            raise ValueError(
-                f"Expected exactly one distinct (window_start, window_end) in {panel_path}, "
-                f"found {len(window_rows)} -- this module has only been validated against a "
-                "single-window panel; a multi-window panel needs this check re-scoped, not "
-                "blindly run over pooled windows."
-            )
-        window_start, window_end = window_rows[0]
 
         (n_pop, n_pos_total, n_neg_total) = con.execute(
             "SELECT count(*), "

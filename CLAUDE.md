@@ -45,8 +45,17 @@ This project handles datasets far larger than any context window. These rules ar
 - Detectors are rule-based, not learned. Keep them inspectable and unit-tested against synthetic
   cases.
 - Models: Isolation Forest (unsupervised) and LightGBM (supervised). Nothing exotic until the
-  baseline is beaten. Every model must beat the naive baseline — "tanker over 15 years old under a
-  flag of convenience" — or the problem is in the features, not the model.
+  baseline is beaten. Every model must beat the naive baseline — **"tanker under a flag of
+  convenience"** (`model/baseline.py`'s R2; 21.9% precision, 7.2x lift on the real 2024-06 window)
+  — or the problem is in the features, not the model. **Primary comparison metric: precision at
+  the model's own flagged/alert count (a matched alert budget), with lift as secondary context.**
+  Do not compare against `model.baseline`'s `precision_at_20` column — that figure is a documented
+  artifact of a degenerate tie-break on this rule (an `analyst-review` finding; see
+  `model/baseline.py`'s module docstring), not a meaningful top-20. The age term ("over 15 years
+  old") originally in this line was investigated with a real, legally-usable source (Wikidata) and
+  dropped on measured evidence of label contamination, not abandoned for lack of trying — see
+  `docs/DECISIONS.md`'s 2026-09-23 P4-1 entry. If `model.build_year_gate` ever returns GO against a
+  future window, the age rule (R3) activates automatically with no code change.
 - **Never let future information reach a model trained on the past.** Every feature must be
   computable from data available strictly before the cutoff date. Run `analyst-review` to check this
   after any modelling change; a temporal leak invalidates the entire result and is easy to miss.

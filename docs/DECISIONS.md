@@ -1243,3 +1243,145 @@ _2026-09-22_ (P3-4/A5: the A0.4 re-download drill, then `pipeline/prune.py`)
   alone, this invocation's own quarantine survives until the next), and selection edge cases
   (already-reduced day is not a candidate, a day without `verified_at` is not a candidate, no
   candidates is a clean no-op). 429 total, `ruff` clean.
+
+_2026-09-23_ (P4-1: the naive baseline, unblocked)
+
+- **P4-1 shipped as three nested rules (R1 tanker, R2 tanker+FOC, R3 tanker+FOC+age), not one,
+  because the age term's viability could not be known in advance.** `CLAUDE.md`'s original literal
+  definition ("tanker over 15 years old under a flag of convenience") was blocked since P3-3: no
+  build-year data exists in any source this project ingests. Rather than block the whole baseline
+  on resolving that, R1/R2 were shipped as a standalone, immediately publishable floor, with R3
+  wired to activate only if a later-built acceptance gate (`model.build_year_gate`) says GO — see
+  below for why it didn't. `model/evaluation.py` was extracted from `model/discriminative_check.py`
+  (P4-0) first, so both P4-0 and P4-1 share one definition of the evaluation population and one
+  bootstrap implementation — verified byte-identical (real `discriminative_check.parquet` rebuilt
+  with `--force` and diffed against a pre-refactor backup; every column matched except
+  `built_at`/`git_sha`, which are expected to change).
+- **`process/foc.py`: the ITF's 48-registry flags-of-convenience list, hardcoded and dated
+  2026-09-23**, not fetched — the ITF's page (`itfseafarers.org/.../current-registries-listed-focs`)
+  carries no last-updated date and no machine-readable feed, so a live scrape would be a
+  silent-drift dependency, not reproducibility. 43 of the 48 names matched `process.mid.
+  MID_COUNTRY`'s values verbatim; 3 were name variants resolved by hand (`St Kitts and Nevis` →
+  `Saint Kitts and Nevis`, `St Vincent` → `Saint Vincent and the Grenadines`, `Tanzania (Zanzibar)`
+  → `Tanzania`); 2 (`French International Ship Registry (FIS)`, `German International Ship
+  Registry (GIS)`) have no MID-level counterpart at all — second/international registers invisible
+  at MID granularity — and are left unmapped, with a guard test asserting every ITF name is either
+  mapped or explicitly accounted for.
+- **Real R1/R2 numbers on P4-0's own population** (4,864 rows, 147 positive, 3.02% prevalence):
+  R1 (tanker) flags 893, 135 true positives, 15.1% precision, 91.8% recall, 5.0x lift. R2
+  (tanker+FOC) flags 572, 125 true positives, 21.9% precision, 85.0% recall, 7.2x lift. **This is a
+  demanding baseline even before any age term** — these are the numbers P4-2/P4-3 must beat.
+  **precision@20 came out 0.000 for both, and this is NOT a random draw that "happened to" miss —
+  an `analyst-review` pass caught the original write-up of this entry making exactly that false
+  claim.** `model.baseline`'s tie-break for "top 20" is (rule value DESC, mmsi ASC), and an MMSI's
+  first three digits are its MID, i.e. its flag state — sorting by mmsi ascending sorts by flag,
+  not neutrally. R2's real top-20-by-mmsi is 100% Cyprus (the lowest-numbered flag-of-convenience
+  MID), which contributes 0 of R2's 125 true positives; the real positives cluster in
+  higher-numbered MIDs (Panama, Gabon, Cook Islands, Liberia, Marshall Islands — see the flag
+  concentration finding below). precision@20 = 0.000 is therefore a **deterministic property of
+  the sort key**, and would read 0.000 on every future run of this window regardless of how good
+  R1/R2 are, unless a low-MID flag is designated. Fixed: `model.baseline`'s module docstring and
+  summary text now say this explicitly, and `n_tied_at_cutoff` (893/572, i.e. every flagged row
+  ties the boundary) is documented as evidence the top-20 slice is arbitrary among flagged rows,
+  not proof of what drove the number. **The number to compare P4-2/P4-3 against is precision at
+  n_flagged (plain `precision`, already reported per rule), never precision@20 from this module.**
+- **Build-year sourcing: GFW and Equasis/GISIS ruled out, Wikidata chosen, confirmed live
+  2026-09-23.** GFW's `/v3/vessels/search` `registryInfo` has no build-year field (confirmed
+  against live API documentation). Equasis and IMO GISIS both explicitly prohibit bulk/automated
+  extraction in their terms of use — ruled out on licence grounds, not difficulty. Wikidata's
+  public SPARQL endpoint (`query.wikidata.org/sparql`) is CC0 and needs no token; live count
+  2026-09-23: 96,571 ship items with an IMO number, most also carrying a build/service date.
+  **Real quirk: Wikimedia's User-Agent policy is enforced, not just documented** — an unlabelled
+  request gets HTTP 403; `ingest/wikidata_ships.py` sends a descriptive User-Agent. **Real quirk: a
+  P729/P571/P458 statement marked "unknown value" surfaces as a blank-node genid URI, not a
+  literal** (real example: Q12329788) — this was not anticipated from documentation alone and was
+  only found by running the real fetch, which crashed on the first attempt (`WikidataSchemaError`
+  raised at `datetime.fromisoformat` on a genid URL); fixed by checking each binding's `type` field
+  before treating it as a date literal, and now covered by a dedicated test. Reconciliation (per
+  IMO, agree within ±1 year → keep the earliest; disagree → NULL + `is_ambiguous`) run for real:
+  95,503 distinct checksum-valid IMO (17 raw literals were not 7 digits, dropped), 92,112 with a
+  usable `build_year`, 18 ambiguous.
+- **`model.build_year_gate`'s real verdict: NO-GO — R3 stays blocked, and this is the correct,
+  informative answer, not a failure to resolve the question.** Three gates run against P4-0's exact
+  population: **G1 coverage PASSED** (85.26%, well above the 50% bar — Wikidata is a strong source
+  by volume). **G2 differential coverage FAILED, in both scopes tested**: vessels sanctioned after
+  window_end have a Wikidata-coverage rate of 94.56% vs 84.97% for never-sanctioned ones over the
+  whole population (9.59pp gap, Fisher p=0.00054), and — after an `analyst-review` pass found the
+  whole-population test alone could pass even if the gap were worse inside the specific vessels R3
+  scores — a SECOND Fisher test restricted to the tanker+FOC (R1 AND R2) subpopulation was added
+  (`model.evaluation.add_tanker_foc_columns`, shared with `model.baseline` so both modules use one
+  rule definition): real result 95.20% vs 83.89% (11.31pp gap, Fisher p=0.00061), WORSE than the
+  global test, confirming the risk was real, not hypothetical, even though in this particular run
+  it didn't flip the overall verdict (both scopes already failed independently). Both must pass;
+  either failing fails G2. The bare `has_build_year` indicator's AUC against the label (0.548, 95%
+  CI [0.527, 0.565], excluding 0.5) is reported for context but no longer independently drives the
+  verdict — `analyst-review` showed it is algebraically the same statistic as the coverage gap for
+  a binary predictor (AUC = 0.5 + gap/2 exactly: 0.5 + (0.9456-0.8497)/2 = 0.5480, matching the
+  real recorded value), so letting its own CI fail G2 made `MAX_COVERAGE_GAP_PP`'s 5pp
+  effect-size floor dead weight at any population size large enough for a small, practically
+  irrelevant gap to still exclude 0.5. This is real, measured evidence of exactly the contamination
+  mechanism the plan worried about before any data was fetched: a sanctioned vessel is more likely
+  to have a Wikidata page, independent of its actual age. **G3 plausibility FAILED in isolation** (1
+  of 4,147 covered rows — mmsi 211401960, imo 9832767 — has a `build_year` of 2025, after the
+  window it was observed transmitting AIS in; verified by hand this is isolated Wikidata source
+  noise, not a join bug, since exactly one Wikidata item claims that IMO). G3's original design (a
+  hard `ValueError` on ANY future build_year, per the approved plan) was revised after this real
+  finding: an isolated case (below `MAX_IMPLAUSIBLE_FRACTION_BEFORE_RAISE`, 1%) now fails G3 but
+  lets the gate complete and report — a `ValueError` crash would have hidden G1/G2's already-
+  decisive verdict behind a traceback; a rate above that threshold still raises, since that pattern
+  would look systemic (a real join bug) rather than isolated noise. Overall verdict: NO-GO.
+  `model.baseline` correctly reports R3 as `blocked_by_gate` with the specific reason
+  (`model.build_year_gate verdict is 'NO-GO', not GO`), never silently.
+- **`model.baseline._resolve_r3_availability` now checks the gate's window and freshness, not just
+  its verdict — an `analyst-review` finding that was real but not yet exercised.** Originally it
+  only read `overall_verdict`. Per the module's own design note ("the gate, not a hardcoded flag,
+  is the switch"), a future GO computed for one window would otherwise have silently authorised R3
+  the moment the panel was rebuilt for a DIFFERENT window, or the moment `ingest.wikidata_ships`
+  was re-fetched after the gate last ran — a real temporal-safety gap by construction, even though
+  it never fired in this session (only one window and one Wikidata snapshot exist so far). Fixed:
+  R3 is now blocked, with the specific reason, if the gate's own `(window_start, window_end)`
+  doesn't match the panel being scored, or if `build_year_gate.parquet`'s file mtime predates
+  `ship_build_year.parquet`'s.
+- **`CLAUDE.md` and `tasks.json` updated to match the shipped rule (tanker + flag of convenience),
+  not the original age-inclusive definition** — the age term was investigated in good faith with a
+  real, viable, legally-usable source, and rejected on real measured evidence of label
+  contamination, not abandoned for lack of trying. If `ingest.wikidata_ships` is ever re-run against
+  a future window and `model.build_year_gate` returns GO, R3 activates automatically in
+  `model.baseline` with no code change — the gate, not a hardcoded flag, is the switch.
+- **The positive class R2 flags is heavily flag-concentrated, confirmed on the real data**: within
+  R2's 572 tanker+FOC rows, Gabon is 34/34 (100%) positive, Cook Islands 22/26 (85%), Panama 44/80
+  (55%), against Liberia 7/93 (8%) and Marshall Islands 5/93 (5%). A meaningful share of R2's 7.2x
+  lift is the baseline re-deriving OFAC/UK's own shadow-fleet targeting by registry, not detecting
+  vessel behaviour — consistent with, and now direct evidence for, the label-bias limitation
+  already stated in the README. Worth citing next to the 7.2x number wherever it's quoted, not only
+  in the README's general statement.
+- **Real DuckDB syntax bug found in three new modules (`model.baseline`, `model.build_year_gate`):
+  `by` is a reserved keyword and cannot be used as a table alias** (`LEFT JOIN ... by ON by.imo =
+  ...` raised `ParserException: syntax error at or near "by"`). Renamed to `byr` in both. A small,
+  easy-to-hit trap worth remembering before reaching for `by` as a join alias in this codebase
+  again.
+- **Real DuckDB type bug found by `analyst-review`'s window/freshness fix exposing a test edge
+  case: embedding a Python float literal directly in a `SELECT ... AS col` (rather than binding it
+  through a typed `CREATE TABLE` + `executemany`) makes DuckDB infer `DECIMAL(17,16)`, not
+  `DOUBLE`.** Confirmed on the real, already-built `build_year_gate.parquet`: every float column
+  (`g1_coverage`, `g2_fisher_p`, `g2_auc`, ...) was `DECIMAL`, not `DOUBLE` — silently, since
+  DuckDB never raises for this, and a test only caught it because `pytest.approx` can't mix
+  `float`/`Decimal` arithmetic. `model.baseline` and `model.discriminative_check` were already
+  unaffected (both build their results via a typed `CREATE TABLE` DDL + `executemany`, the correct
+  pattern) — `model.build_year_gate` was the one module that embedded literals directly, now fixed
+  to match the other two. Worth remembering as a general rule for any future module: never embed a
+  Python float in SQL text, always bind it through a typed column.
+- **An `analyst-review` pass on the finished P4-1 work found 6 real, confirmed issues (the ones
+  above — misleading precision@20 framing, the gate's window/freshness gap, G2's whole-population
+  blind spot, the redundant AUC/Fisher branches, the DECIMAL type bug, and the flag-concentration
+  evidence) plus several smaller/lower-impact ones left as documented limitations rather than
+  fixed**: `has_date_conflict`/`date_source` are recorded by `ingest.wikidata_ships` but not yet
+  consumed by the gate or baseline (P571-vs-P729 heterogeneity near the 15-year cut, and the
+  ±1-year reconciliation rule's `min()` choice, both bias R3 slightly toward firing more often —
+  moot while R3 is blocked); every module's idempotent-skip (`out_path.exists() and not force`)
+  doesn't compare against the input panel's own freshness, a pattern this project already uses
+  everywhere (`model.discriminative_check`, `process.sanctions_match`, ...), not something unique
+  to introduce a special case for here; and the project's single real window (2024-06 only) means
+  P4-2/P4-3 cannot yet do a real temporal train/test split — R1/R2's in-sample reporting is honest
+  for unfitted rules, but this is the largest real constraint facing P4-2, and belongs in its own
+  task's scoping, not fixed retroactively in P4-1.

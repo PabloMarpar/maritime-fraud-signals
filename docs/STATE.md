@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-22_
+_Last updated: 2026-09-23_
 
 ## Done
 
@@ -179,22 +179,54 @@ _Last updated: 2026-09-22_
   section must say so plainly.** 360 tests pass (13 new), `ruff` clean.
 
 - **P3-4 done: the full per-window storage pipeline (A1-A5), 2026-09-22.** Windows can now be
-  built and safely pruned without keeping a whole month's clean data on disk. Detectors,
-  `process/tracks.py`/`identity.py` write window-partitioned artifacts; `detect/liveness.py` and
-  the new `process/thin.py` write day-partitioned ones; `pipeline/window.py` orchestrates
-  build→verify→fingerprint (creates only, never deletes); `pipeline/prune.py` is the only place
-  deletion happens (quarantine-first via `.trash`, dry-run by default, `--yes-delete` opt-in,
-  every gate re-evaluated at deletion time, not just at build time). The mandatory A0.4
-  re-download drill PASSED first: a real day quarantined, re-downloaded and re-cleaned reproduced
-  an identical fingerprint, confirming the DMA archive is stable enough to trust deletion against.
-  `pipeline/prune.py` has been dry-run-tested against real data but never actually run with
-  `--yes-delete` -- the 30-day window's clean data and every legacy single-file artifact are still
-  all on disk. 429 tests, `ruff` clean. Full real numbers and every bug found per sub-part:
-  `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."P3-4/A5" entries; full spec: `docs/PLAN_P4-0_P3-4.md`.
+  built and safely pruned without keeping a whole month's clean data on disk: detectors +
+  `process/tracks.py`/`identity.py` write window-partitioned artifacts, `detect/liveness.py`/
+  `process/thin.py` write day-partitioned ones, `pipeline/window.py` orchestrates
+  build→verify→fingerprint (creates only), `pipeline/prune.py` is the only place deletion happens
+  (quarantine-first `.trash`, dry-run by default, `--yes-delete` opt-in). The mandatory A0.4
+  re-download drill PASSED first (fingerprint reproduced exactly), confirming the DMA archive is
+  stable enough to trust deletion against. **Never actually run with `--yes-delete`** -- the 30-day
+  window's clean data and every legacy single-file artifact are still all on disk. 429 tests,
+  `ruff` clean. Full detail: `docs/DECISIONS.md`'s 2026-09-22 "P3-4/A1".."A5" entries.
+
+- **P4-1 done: the naive baseline, 2026-09-23. Unblocked, not worked around.** `model/baseline.py`:
+  R1 tanker (893 flagged, 135 tp, 15.1% precision, 5.0x lift) and R2 tanker+flag-of-convenience
+  (572 flagged, 125 tp, 21.9% precision, 7.2x lift) -- the shipped baseline every Phase 4 model
+  must beat, on P4-0's exact 4,864-row/147-positive population. New `process/foc.py`: the ITF's 48
+  flag-of-convenience registries, hardcoded and dated (no feed to scrape), 43/48 matching
+  `process.mid.MID_COUNTRY` verbatim, 3 name variants resolved, 2 (France/Germany's international
+  second registers) unmapped by construction, guard-tested. New `model/evaluation.py` extracted
+  from P4-0's `discriminative_check.py` (shared population + bootstrap, verified byte-identical
+  after the refactor). **R3 (age >15y) fully implemented but correctly `blocked_by_gate`**: new
+  `ingest/wikidata_ships.py` (CC0 SPARQL source; GFW has no build-year field, Equasis/GISIS
+  prohibit bulk extraction by licence; real run 95,503 checksum-valid IMO, 92,112 with a usable
+  build_year) + new `model/build_year_gate.py` (3 gates against P4-0's population: G1 coverage
+  PASSED 85.26%; **G2 differential coverage FAILED** -- 94.56% vs 84.97% Wikidata-coverage rate
+  between sanctioned-after and never-sanctioned vessels, AUC 0.548 CI [0.527, 0.565] excluding
+  0.5, real measured label contamination; G3 plausibility failed in isolation on one real vessel,
+  verified as source noise not a join bug). **Overall verdict NO-GO** -- this resolves the
+  standing vessel-age open question below, it does not defer it. `CLAUDE.md`/`tasks.json` updated
+  to the shipped rule. A dedicated `analyst-review` pass before close found and fixed 6 real issues
+  (misleading "happened to" precision@20 framing -- it's a deterministic mmsi/flag sort artifact,
+  not a random draw; the gate's window/freshness weren't checked before honouring a GO verdict; G2
+  tested only the whole population, missing a worse gap inside the tanker+FOC subpopulation where
+  R3 actually operates, now tested both ways; the AUC branch was mathematically redundant with the
+  Fisher branch and had no effect-size floor; a real DuckDB DECIMAL-vs-DOUBLE type bug in
+  `build_year_gate.parquet`; and real flag-concentration evidence for the label-bias limitation,
+  Gabon 34/34 positive within R2) -- full detail in `docs/DECISIONS.md`'s 2026-09-23 entry, which
+  also lists what was deliberately left as documented limitation rather than fixed. 45 new tests
+  (474 total), `ruff` clean.
 
 ## Next up
 
-**P4-1 (naive baseline)** stays blocked on the vessel-age open question below.
+**P4-2 (Isolation Forest on the vessel-month features)** -- `model/baseline.py`'s R1/R2 (compare
+against their `precision` column, never `precision_at_20` -- see `CLAUDE.md`) and
+`baseline_scores.parquet`'s `tier` column are the target to beat; population must stay restricted
+to `imo IS NOT NULL` per `features.panel`'s hard blocker (see P3-3 above). **Real constraint found
+during P4-1's `analyst-review` pass: this project has only one real window (2024-06), so no
+temporal train/test split is possible yet.** R1/R2's in-sample reporting was fine for unfitted
+rules; P4-2/P4-3 cannot be honestly evaluated without a second window -- scope that in, not around,
+before training anything.
 
 ## Blocked
 
@@ -244,15 +276,18 @@ _Last updated: 2026-09-22_
   episode, 5.9% vs 32.0% with any spoofing event, median message count nearly identical (23,245 vs
   22,459, ruling out raw-exposure as a trivial explanation), `n_draught_change_unexplained` alone
   pointing the expected way (40.7% vs 24.6% of tankers).
-- **No vessel-age (build-year) data exists anywhere in this project's ingested data.** Confirmed
-  against the real clean-partition schema while building `features/panel.py` (P3-3): the DMA AIS
-  feed carries no build-year field, and nothing else ingested so far (sanctions lists, GFW) carries
-  one either. This directly blocks P4-1's naive baseline exactly as specified ("tanker over 15 years
-  old under a flag of convenience") -- P4-1 must either find a ship-registry data source for build
-  year (e.g. an IMO-keyed registry lookup) or redefine the baseline without an age term before it
-  can be implemented. Not solved here; `features/panel.py` provides `flag_country` (raw MID-derived
-  flag name) but deliberately no age column and no "flag of convenience" classification (both
-  explicitly P4-1's job, not P3-3's).
+- **RESOLVED by P4-1 (2026-09-23): vessel-age (build-year) data is now sourced from Wikidata
+  (`ingest/wikidata_ships.py`), but `model/build_year_gate.py` found real label contamination and
+  returned NO-GO, so the shipped baseline (`model/baseline.py`) does not use it.** This was
+  originally raised here during P3-3: the DMA AIS feed, sanctions lists and GFW all carry no
+  build-year field. GFW's vessel-registry endpoint was also confirmed to have none; Equasis/GISIS
+  were ruled out on licence grounds (bulk extraction prohibited), not attempted. Wikidata (CC0)
+  gave 85.26% coverage of P4-0's evaluation population -- comfortably enough data -- but
+  differential coverage between the sanctioned-after and never-sanctioned classes (94.56% vs
+  84.97%, AUC 0.548 CI [0.527, 0.565] excluding 0.5) means build-year *availability* itself mildly
+  predicts the label, the exact contamination risk a crowd-sourced source raises. The age term (R3)
+  is fully implemented and will activate automatically, no code change, if a future window's gate
+  run returns GO. See `docs/DECISIONS.md`'s 2026-09-23 entry for the full real numbers.
 - **The P4-3 rolling-cutoff blocker (`gaps`/`spoofing`/`sts` + the static whole-window features)
   is written up precisely under P3-3's "In progress" entry above -- read that, not this line,
   before starting P4-3.** (Superseded here to avoid keeping two versions of the same finding in

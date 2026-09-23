@@ -154,6 +154,54 @@ only) is implemented and unit-tested but never exercised by the current live sna
 - *AIS Trajectories from Danish Waters for Abnormal Behavior Detection*
 - `https://data.dtu.dk/collections/AIS_Trajectories_from_Danish_Waters_for_Abnormal_Behavior_Detection/6287841`
 
+## Vessel reference data (not AIS, not a label)
+
+### Wikidata — ship build year, `ingest/wikidata_ships.py`
+- **URL:** `https://query.wikidata.org/sparql`, `GET` with `query`/`format=json`. Confirmed live
+  2026-09-23.
+- **Licence:** CC0. No registration, no token.
+- **Access:** **Wikimedia's User-Agent policy is enforced in practice**, not just documented — an
+  unlabelled request gets HTTP 403 (confirmed live 2026-09-23). A descriptive User-Agent naming
+  this project and its repository is required on every request; see `ingest/wikidata_ships.USER_AGENT`.
+- **Query:** pulls the WHOLE Wikidata ship set with an IMO number (`wdt:P458`), not just this
+  project's own IMO list — scoping the query to our own IMOs would make the fetch aware of the
+  population it is later checked against for label contamination (see `model.build_year_gate`).
+  Paginated `ORDER BY ?item LIMIT 10000 OFFSET n`; a 10,000-row page took 8-13s in testing, well
+  inside WDQS's ~60s query timeout.
+- **Why this source:** the naive baseline (P4-1, `CLAUDE.md`) originally called for vessel age.
+  GFW's `/v3/vessels/search` registry has no build-year field; Equasis and IMO GISIS both prohibit
+  bulk/automated extraction in their terms of use. Wikidata is the only build-year source this
+  project can legally use in bulk.
+- **Real run 2026-09-23:** 96,571 raw (item, imo, dates) rows fetched; 95,503 distinct
+  checksum-valid IMO after re-validating with `process.identity.VALID_IMO_SQL` (17 raw IMO literals
+  were not exactly 7 digits — `P458` is free text, not format-constrained); 92,112 with a usable
+  `build_year` after reconciliation; 18 IMO ambiguous (items disagreeing by more than a year, see
+  reconciliation rule below).
+- **Quirk (date precision):** `P729` (service entry) is preferred over `P571` (inception) when
+  both are present. Wikidata date statements carry their own precision (year-only statements
+  render as `YYYY-01-01T00:00:00Z`) — irrelevant here since only the year is ever extracted.
+- **Quirk (unknown-value statements):** a `P729`/`P571`/`P458` statement marked "unknown value"
+  (Wikidata's "somevalue") surfaces in the SPARQL binding as a blank-node genid URI
+  (`type != "literal"`), not a literal — confirmed live 2026-09-23 (real example: Q12329788, whose
+  P729 has both a real-dated statement and a separate "unknown value" one, so the item appears
+  twice in the raw rows). Treated as "no date"/"no usable IMO", not an error.
+- **Reconciliation rule:** per IMO (which can map to more than one Wikidata item), if every item's
+  resolved year agrees within ±1 year, `build_year` is their minimum; if they disagree by more, it
+  is NULL and `is_ambiguous` is true — never an arbitrary pick. Lands at
+  `data/reference/ship_build_year.parquet` (reconciled) and
+  `data/reference/wikidata_ships_raw.parquet` (every raw row, for auditability).
+- **Real quirk found post-ingestion, not in any spec:** one real vessel this project observed
+  transmitting AIS in the 2024-06 window (mmsi 211401960, imo 9832767) joins to a Wikidata
+  `build_year` of 2025 — after the window it was observed in, which is physically impossible.
+  Verified by hand this is not a join/reconciliation bug (exactly one Wikidata item claims that
+  IMO, correctly reconciled) — isolated Wikidata source noise. `model.build_year_gate`'s G3 check
+  catches this class of anomaly against the actual evaluation population, not the raw reference
+  table (which legitimately contains ships built after 2024, since it was fetched in 2026).
+- **Role:** feeds `model.build_year_gate`, the acceptance gate `model.baseline`'s R3 rule depends
+  on — see `docs/DECISIONS.md`'s P4-1 entry for the real gate result (NO-GO: differential coverage
+  between the sanctioned and never-sanctioned classes, a real contamination signal, not just an
+  isolated data-quality issue).
+
 ## Reference geometry (not AIS, not a label)
 
 ### Natural Earth — land polygons
