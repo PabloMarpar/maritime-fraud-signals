@@ -1422,3 +1422,33 @@ _2026-09-23_ (second real window: the DMA archive is not "2006 onwards" as docum
   2025-02-26) to leave margin if the boundary turns out to be less exact than the single day-by-
   day probe suggests. Built via the existing `pipeline.window` orchestrator (P3-4/A4) with no
   code changes — see `docs/STATE.md` for the real run's numbers.
+- **`ingest/dma.py` retries a transient `httpx.TransportError` in place, per URL, up to 5 times
+  with exponential backoff (2s, 4s, 8s, 16s), before moving to the next filename pattern.** Reason:
+  the second window's download stalled repeatedly against this session's flaky connection
+  (`ReadTimeout`, occasionally `ConnectError`) — confirmed blocking, not cosmetic: a naive
+  whole-pipeline retry loop only advanced ~1 real day per attempt. Scoped deliberately narrow: a
+  real 404 (`httpx.HTTPStatusError`) is NOT retried, it still falls straight through to the next
+  pattern as before — only a network-level failure gets the backoff treatment, so a genuinely dead
+  host still fails in bounded time (~30s/pattern) rather than hanging. This was the open question
+  already on record in `docs/STATE.md` about `download_day` lacking retry logic; now resolved by
+  code, not just noted.
+- **The second window's build was stopped mid-run (during `detect.spoofing`'s `on_land` check) for
+  a planned machine shutdown, and confirmed safe to interrupt at any point before
+  `pipeline.window._verify_window` runs.** Reason: `build_spoofing_events` only writes its output
+  file once, after all four checks finish — killing the process mid-check leaves no partial file on
+  disk, and no `verified_at`/fingerprint is recorded until every artifact for the window passes
+  verification (P3-4/A4's own all-or-nothing design). Confirmed empirically: no stray temp files,
+  no partial `data/detect/spoofing` output for the window, no manifest entries with `verified_at`
+  for any November day. Resume with the same `pipeline.window` invocation; every artifact already
+  built (60 days clean, tracks, identity, anchorages, ship_type, `impossible_speed`) is skipped as
+  already-present.
+- **A stray background process from an earlier, abandoned retry attempt was left running
+  unsupervised and raced a later attempt against the same `data/` tree, corrupting one clean
+  partition (`2024-10-23`, truncated parquet).** Caught by a real DuckDB read + row-count
+  validation pass over every clean partition (not just the one that errored) before trusting
+  anything — every other day (2024-10-02..2024-10-22, all 30 of November) validated intact.
+  Corrupted partition deleted; harmless to rebuild (raw data is always re-derivable). Operational
+  lesson, not a code defect: confirm a previous background invocation has actually exited (not just
+  that its own wrapper/log reported completion) before launching another one against the same data
+  directory — Windows background process tracking in this environment does not guarantee a killed
+  or superseded shell also kills its python child.
