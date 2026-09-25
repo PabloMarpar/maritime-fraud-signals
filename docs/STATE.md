@@ -304,6 +304,16 @@ lead-in; June/November already exist and are only verified), `detect.gaps` per w
 `data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
 (START/OK/FAIL per step, `DONE` at the end); per-step logs next to it. Idempotent -- if it dies,
 re-run the same script and it resumes. **Never start a second build over `data/` while it runs.**
+**Blocker observed at launch (2026-09-25 ~14:00): the internet connection is very slow** -- ~120
+KB/s to the DMA S3 bucket and ~155 KB/s to a generic speed test, so it's the local connection,
+not S3. One raw day (~500 MB) then takes ~1 h and the 272 days would take >10 days. Left running
+unchanged per the author; if the connection recovers it speeds up by itself. How to check:
+`outputs/logs/build_archive_windows.status` and the size of the zip under `data/tmp/dma-<day>-*/`.
+How to stop, if the author decides to: kill the `bash.exe` running the script and its `python`
+children (check with `Get-Process python`), then re-run the script later -- every step is
+idempotent; a half-downloaded day is re-fetched from scratch. Other agents working in parallel
+must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans that compete for
+disk).
 Disk: ~272 new days x ~0.47 GB ~ 128 GB of clean data against ~239 GB free, so no pruning needed.
 Why: P4-3 had 16 training positives and one cutoff; 109 of the vessels already matched in our
 AIS were designated inside the archive period, and designations peak in 2024-Q4 (130) and
