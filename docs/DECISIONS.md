@@ -1479,3 +1479,57 @@ _2026-09-25_ (P4-1b close: on_land parallelized, second window finished)
   ~62-minute unlogged gap before named stages begin was only noticed after `on_land`'s fix had
   already made it the new bottleneck; diagnosing it (unlogged setup cost vs. a similar serial-loop
   pattern) is separate work, not blocking P4-2. See `docs/STATE.md`'s Open questions.
+
+_2026-09-25_ (P4-2: Isolation Forest, first out-of-time evaluation)
+
+- **`features.panel.build_panel` now reads only its own window's partitions, never a `window=*`
+  glob.** Found before building the first November panel: every detector join bounds events only
+  from above (`<= month_end_ts`), so with June and November both on disk (plus the small
+  `2024-06-10_2024-06-11` validation window) a November panel read through the globs would have
+  counted every June event too, and the roster/representative imo would have mixed windows.
+  Identity, voyages, ship_type and all five detector tables (gaps now included, at
+  `data/detect/gaps/window=<start>_<end>/`) resolve to the exact window partition. Verified: the
+  June panel rebuilt this way matches the legacy `vessel_month_panel.parquet` on every row and
+  column except `n_impossible_speed` on 14 rows (5,499 vs 5,497 events), the already-documented
+  `lag()` tie-break non-determinism. One panel per window, at
+  `data/processed/panel/window=<start>_<end>/part-0.parquet`; the legacy `PANEL_PATH` is untouched
+  so P4-0/P4-1's own outputs stay reproducible.
+- **November gaps computed separately** (`detect.gaps` is not part of `pipeline.window`):
+  26,203 candidates (June: 74,546), end-exclusive `--end 2024-12-01`, matching June's
+  `--end 2024-07-01` convention; ~10 min serial, measured before deciding not to parallelize it.
+  June's legacy `gaps.parquet` was copied (not moved) into its own window partition.
+- **`sanctions_matches.parquet` rebuilt over both windows' identity** (164 -> 282 matched mmsi).
+  Without it, vessels seen only in November would have been labelled negative. June's labels are
+  unaffected (the panel joins by its own window's imo). November: 26 already sanctioned by
+  window_end, 139 forward positives, population 4,449.
+- **The baseline replicates out-of-time.** R2 on November: 574 flagged, 117 tp, precision 0.204,
+  lift 6.5x (June: 0.219, 7.2x). R3 correctly stays blocked (the build-year gate was computed for
+  June's window).
+- **Isolation Forest loses to the baseline, decisively, and this is the finding, not a bug.** Fit
+  on June (no labels), scored on November, compared at a matched alert budget (k = R2's own flag
+  count per split) with a paired row-bootstrap CI on the precision difference. Test: `detectors`
+  AUC 0.364, precision@574 0.016; `detectors_context` (+ is_tanker, is_foc) AUC 0.529, precision
+  0.017; both CIs entirely below 0 vs R2's 0.204. Stable across 10 seeds. The top-ranked
+  "anomalies" are dockside-dwelling, heavily-observed local traffic (median 67 `on_land` events vs
+  0; 12.5% tankers vs 21%) — the same P4-0 finding restated as a model: sanctioned vessels generate
+  *less* detector signal inside Danish coverage, so "most unusual" points away from them. Even
+  handing the forest R2's own two inputs doesn't help, because an anomaly score has no reason to
+  weight "tanker" as risky. Per `CLAUDE.md`, the problem is in the features, not the model; P4-3's
+  supervised model is the right tool to test whether any feature adds to R2.
+- **No GPU for P4-2.** ~5k rows x ~60 features per window; the whole run (2 variants x 11 forests
+  x 1,000 trees + 2,000-resample bootstraps) takes ~50s on CPU with `n_jobs=-1`. cuML has no
+  native Windows build. Revisit for P4-3 only if the panel grows by orders of magnitude.
+- **`analyst-review` pass before close: no blockers.** Independently confirmed: no November data
+  reaches the fit or the preprocessing; the rebuilt `sanctions_matches` changes 0 of 21,146 June
+  rows (imo, both labels, designation date); every November detector partition has 0 events before
+  2024-11-01; the 26,203 November gaps reproduce from the November voyages alone. Acted on:
+  the regression test now covers all five detector tables plus the default roster; the docstring
+  no longer claims the population filter is exactly knowable at window end (2026 snapshot,
+  delistings/re-designations) and lists every feature; the summary now reports lift (0.50x on
+  test: *worse than random*), AUC separately for vessels seen vs unseen in June (0.305 / 0.430 —
+  the inversion holds for both, so it isn't vessel novelty), and the seasonal-drift and label-bias
+  caveats. **Recorded for P4-3, not fixed here: the two windows' label periods overlap** — 121 of
+  June's 147 forward positives were designated after 2024-11-30, so a supervised model trained on
+  June's labels would be learning November-period outcomes; P4-3 must cap the training label at
+  designations in (train window_end, test window_start). Design was fixed before looking at
+  November; no sign flip applied after seeing AUC < 0.5.

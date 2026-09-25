@@ -51,13 +51,10 @@ row_number query, never a per-row Python scan), ``voyage_count`` (count of this 
 computed over the WHOLE window regardless of which month a row represents -- a real, confirmed,
 larger P4-3 blocker than the detector ``knowable_at`` proxy issue below (a future month's identity,
 including the representative ``imo`` itself, could silently determine a past month's label). Not
-fixed here; see ``docs/STATE.md``'s open questions before building a multi-month panel. Since
-P3-4/A2, ``mmsi_imo_path``/``voyages_path`` default to a glob over every window built so far
-rather than one whole-range file -- ``voyage_count`` stays exactly as scoped as before (its own
-query filters to ``[window_start, window_end]``), but ``imo``/``is_orphaned``/``is_reused``/
-``total_message_count`` now see every accumulated window's identity facts, not just this one's --
-the SAME limitation, wider in scope. ``ship_type`` does NOT widen this way: its reference path is
-resolved to this call's own exact window, not a glob -- see build_panel's own docstring.**
+fixed here; see ``docs/STATE.md``'s open questions before building a multi-month panel. Every
+window-partitioned input resolves to this call's own exact window partition (see build_panel's
+docstring), so this limitation stays scoped to the one window a panel is built from -- one panel
+per window, never a multi-window glob.**
 
 **Representative IMO for a reused mmsi.** ``process.identity`` already records, per mmsi, every
 distinct valid IMO it was ever paired with in the window, plus ``is_reused=true`` when there is more
@@ -252,12 +249,12 @@ from pathlib import Path
 import duckdb
 
 from detect.liveness import LIVENESS_ROOT
-from process.identity import IDENTITY_GLOB
+from process.identity import IDENTITY_ROOT
 from process.mid import country_of
 from process.partitions import partition_exists, window_partition_path
 from process.sanctions_match import MATCHES_PATH
 from process.ship_type import SHIP_TYPE_ROOT
-from process.tracks import VOYAGES_GLOB
+from process.tracks import VOYAGES_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -672,9 +669,9 @@ _PANEL_SELECT_SQL = (
 def build_panel(
     window_start: date,
     window_end: date,
-    mmsi_imo_path: Path = IDENTITY_GLOB,
+    mmsi_imo_path: Path | None = None,
     sanctions_matches_path: Path = MATCHES_PATH,
-    voyages_path: Path = VOYAGES_GLOB,
+    voyages_path: Path | None = None,
     detect_root: Path = DETECT_ROOT,
     ship_type_reference_root: Path = SHIP_TYPE_ROOT,
     liveness_path: Path = LIVENESS_ROOT,
@@ -693,17 +690,14 @@ def build_panel(
     (detect.gaps/spoofing/sts/identity_anomalies/behaviour); missing liveness_path:
     detect.liveness.build_liveness (P4-0's exposure source, see module docstring).
 
-    ``mmsi_imo_path``/``voyages_path``/``liveness_path`` default to globs over every window built
-    so far (P3-4/A2); ``voyages_path``/``liveness_path`` are safe to accumulate this way because
-    their own aggregate queries already filter to this window/month (see _build_voyage_counts,
-    and _exposure_agg's join on year_month), but ``mmsi_imo_path`` has no such filter -- seeing
-    every window's identity facts, not just this one's, is the SAME already-documented "whole
-    window, no month bound" limitation the module docstring's "Static/identity features" section
-    describes, now widened from "the one window this panel was built from" to "every window ever
-    built" until P4-3 addresses it. ``ship_type_reference_root`` is NOT a glob default, unlike the
-    other four detector-table paths below -- it is resolved to this call's own exact window (same
-    posture as ``detect.identity_anomalies.build_identity_events``), so this one static feature
-    does not silently widen beyond what the module docstring already documents.
+    Every window-partitioned input -- ``mmsi_imo_path``/``voyages_path`` when left as None, the
+    ship_type reference, and all five detector tables under ``detect_root`` (``gaps`` included,
+    at ``detect_root/gaps/window=<start>_<end>/``) -- resolves to THIS call's exact window
+    partition, never a ``window=*`` glob. A glob is wrong as soon as a second window exists: the
+    detector joins only bound events from above (``<= month_end_ts``), so a November panel read
+    through a glob would also count every June event, and the roster would pull in vessels (and
+    representative imo values) seen only in another window. ``liveness_path`` stays a
+    whole-directory default because ``_exposure_agg`` already joins it on ``year_month``.
 
     Opens exactly one DuckDB connection and reuses it across the whole build.
     """
@@ -712,6 +706,11 @@ def build_panel(
             "%s already exists, skipping (pass force=True / --force to rebuild)", out_path
         )
         return out_path
+
+    if mmsi_imo_path is None:
+        mmsi_imo_path = window_partition_path(window_start, window_end, IDENTITY_ROOT)
+    if voyages_path is None:
+        voyages_path = window_partition_path(window_start, window_end, VOYAGES_ROOT)
 
     if not partition_exists(mmsi_imo_path):
         raise FileNotFoundError(
@@ -736,11 +735,14 @@ def build_panel(
             f"No ship_type reference at {ship_type_reference_path}; run "
             "process.ship_type.build_ship_type_reference first, for this exact window"
         )
-    gaps_path = detect_root / "gaps.parquet"
-    spoofing_path = detect_root / "spoofing" / "window=*" / "part-0.parquet"
-    sts_path = detect_root / "sts" / "window=*" / "part-0.parquet"
-    identity_anomalies_path = detect_root / "identity_anomalies" / "window=*" / "part-0.parquet"
-    behaviour_path = detect_root / "behaviour" / "window=*" / "part-0.parquet"
+    def _detector(kind: str) -> Path:
+        return window_partition_path(window_start, window_end, detect_root / kind)
+
+    gaps_path = _detector("gaps")
+    spoofing_path = _detector("spoofing")
+    sts_path = _detector("sts")
+    identity_anomalies_path = _detector("identity_anomalies")
+    behaviour_path = _detector("behaviour")
     for path, builder in (
         (gaps_path, "detect.gaps.build_gaps"),
         (spoofing_path, "detect.spoofing.build_spoofing_events"),
@@ -823,8 +825,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--end", help="Last day, YYYY-MM-DD (default: same as --start)")
     parser.add_argument(
         "--mmsi-imo-path",
-        default=str(IDENTITY_GLOB),
-        help="Path or glob for the mmsi<->imo identity table(s)",
+        default=None,
+        help="Path to the mmsi<->imo identity table (default: this window's own partition)",
     )
     parser.add_argument(
         "--sanctions-matches-path",
@@ -833,8 +835,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--voyages-path",
-        default=str(VOYAGES_GLOB),
-        help="Path or glob for the voyages table(s)",
+        default=None,
+        help="Path to the voyages table (default: this window's own partition)",
     )
     parser.add_argument(
         "--detect-root", default=str(DETECT_ROOT), help="Root of the five detector tables"
@@ -865,9 +867,9 @@ def main(argv: list[str] | None = None) -> None:
     build_panel(
         start,
         end,
-        mmsi_imo_path=Path(args.mmsi_imo_path),
+        mmsi_imo_path=Path(args.mmsi_imo_path) if args.mmsi_imo_path else None,
         sanctions_matches_path=Path(args.sanctions_matches_path),
-        voyages_path=Path(args.voyages_path),
+        voyages_path=Path(args.voyages_path) if args.voyages_path else None,
         detect_root=Path(args.detect_root),
         ship_type_reference_root=Path(args.ship_type_reference_root),
         liveness_path=Path(args.liveness_path),

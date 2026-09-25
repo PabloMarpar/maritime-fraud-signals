@@ -267,26 +267,52 @@ _Last updated: 2026-09-25_
   12 `shared_identity`). `Window 2024-11-01..2024-11-30 verified and recorded (30 day(s))` --
   `_verify_window` passed for every day.
 
+- **P4-2 done: Isolation Forest loses to the baseline, decisively, out-of-time, 2026-09-25.**
+  Prereqs fixed first: `features.panel.build_panel` read detector tables via `window=*` globs with
+  only an upper time bound, so a November panel would have counted June events -- now every input
+  resolves to the exact window partition (June rebuild matches the legacy panel except the known
+  `impossible_speed` tie-break). November gaps computed (26,203), `sanctions_matches` rebuilt over
+  both windows (282 matched mmsi). Per-window panels live at
+  `data/processed/panel/window=<start>_<end>/part-0.parquet`. November panel: population 4,449,
+  139 forward positives; **R2 replicates out-of-time: precision 0.204, lift 6.5x**
+  (`outputs/baseline_summary_2024-11.txt`). New `model/isolation_forest.py`: fit on June (no
+  labels, train-only preprocessing), scored on November, matched alert budget k=574 with a paired
+  bootstrap: precision 0.016-0.017 vs R2's 0.204, lift 0.50x (worse than random), AUC 0.364
+  (detectors) / 0.529 (+ is_tanker/is_foc), both CIs entirely below R2. Top "anomalies" are
+  dockside-dwelling, heavily-observed local traffic -- P4-0's finding again: future-sanctioned
+  vessels produce *less* detector signal in Danish coverage. No GPU needed (~50s on CPU).
+  `analyst-review`: no blockers; its should-fixes applied (see `docs/DECISIONS.md`). 491 tests,
+  `ruff` clean.
+
 ## In progress
 
 Nothing in progress.
 
 ## Next up
 
-**P4-2 (Isolation Forest on the vessel-month features).** Both windows (2024-06, 2024-11) are now
-built and verified, so P4-2/P4-3 can finally do an honest temporal train/test split (train on the
-earlier window, evaluate on the later one) instead of the in-sample-only reporting R1/R2 were
-limited to. `model/baseline.py`'s R1/R2 (compare against their `precision` column, never
-`precision_at_20` -- see `CLAUDE.md`) and `baseline_scores.parquet`'s `tier` column are the target
-to beat; population must stay restricted to `imo IS NOT NULL` per `features.panel`'s hard blocker
-(see P3-3 above). `features/panel.py` has not yet been run/extended to build a labelled panel over
-the November window -- check whether P4-2 needs that first.
+**P4-3 (LightGBM with rolling temporal cutoffs).** Train on the June panel, test on November, same
+matched-budget comparison against R2 as `model/isolation_forest.py`. **Before training: cap
+June's training label at designations in (2024-06-30, 2024-11-01)** -- 121 of June's 147 forward
+positives were designated after 2024-11-30, i.e. they are November-period outcomes (see
+`model/isolation_forest.py`'s docstring and `docs/DECISIONS.md`'s P4-2 entry). Only one window
+pair exists, so "rolling cutoffs" is one cutoff unless more windows are built. The P3-3
+rolling-cutoff blockers (`sts` repetition, `synthetic_circle` backdating, whole-window static
+features) matter only for intra-window cutoffs; one panel per window sidesteps them. GPU
+(`device="gpu"`) is not worth it at ~5k rows.
 
 ## Blocked
 
 - Nothing blocked.
 
 ## Open questions
+
+- **`detect/gaps.py`, `detect/spoofing.py` and `detect/behaviour.py` still default their voyages
+  input to the `window=*` glob.** `voyage_seq` restarts at 1 per window, so `lead() OVER (PARTITION
+  BY mmsi ORDER BY voyage_seq)` over the glob would pair voyages across windows. No current output
+  is affected (`pipeline.window` and this session's gaps run pass exact partitions; verified by
+  `analyst-review`), but the default is a trap -- switch it to the exact window partition as
+  `features.panel` now does. The stray `data/tracks/voyages/window=2024-06-10_2024-06-11` (P3-4/A4
+  validation window) sits in every window-partitioned tree; harmless to exact-partition readers.
 
 - **`detect/sts.py`'s November run took 76 min, 4x the June baseline (17.6 min), with a ~62-minute
   gap where nothing is logged before its named stages (`slots`, `pair_slots`, `episodes`, `gated`,

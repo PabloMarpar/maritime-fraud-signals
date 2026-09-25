@@ -202,14 +202,12 @@ class _Paths:
         self.liveness = tmp_path / "coverage" / "liveness.parquet"
         self.out_path = tmp_path / "processed" / "vessel_month_panel.parquet"
 
+    # build_panel resolves every detector table to its exact window partition under detect_root,
+    # so fixtures must land at exactly the path it will compute.
     @property
     def gaps(self) -> Path:
-        return self.detect_root / "gaps.parquet"
+        return window_partition_path(WINDOW_START, WINDOW_END, self.detect_root / "gaps")
 
-    # spoofing/sts/identity_anomalies/behaviour are window-partitioned as of P3-4/A2, and
-    # build_panel reads them via a `window=*` glob under detect_root -- any concrete window
-    # directory matches that glob, so tests write to this fixed one (the same window every test
-    # in this file uses).
     @property
     def spoofing(self) -> Path:
         return window_partition_path(WINDOW_START, WINDOW_END, self.detect_root / "spoofing")
@@ -285,6 +283,78 @@ def _run(p: _Paths, force: bool = False) -> Path:
         out_path=p.out_path,
         force=force,
     )
+
+
+_EARLIER_START, _EARLIER_END = date(2024, 3, 1), date(2024, 3, 31)
+_EARLIER_TS = _ts(date(2024, 3, 10))
+
+
+@pytest.mark.parametrize(
+    ("kind", "writer", "row", "count_column"),
+    [
+        ("gaps", _write_gaps, (219000001, _EARLIER_TS, 3.0, 0.9), "n_gaps"),
+        ("spoofing", _write_spoofing, (219000001, "impossible_speed", _EARLIER_TS),
+         "n_spoofing_events_total"),
+        ("sts", _write_sts, (219000001, 219000009, _EARLIER_TS, 0.8), "n_sts_episodes"),
+        ("identity_anomalies", _write_identity_anomalies, (219000001, "name_change", _EARLIER_TS),
+         "n_identity_anomalies_total"),
+        ("behaviour", _write_behaviour,
+         (219000001, "draught_change_unexplained", _EARLIER_TS), "n_draught_change_unexplained"),
+    ],
+)
+def test_other_windows_detector_partitions_are_never_read(tmp_path, kind, writer, row, count_column):
+    """A second window's detector events, dated before this window's end so the month_end_ts
+    join alone would admit them, must not leak into this window's panel."""
+    p = _Paths(tmp_path)
+    _build_minimal_inputs(
+        p,
+        mmsi_imo_rows=[
+            (219000001, VALID_IMO_A, 50, date(2024, 6, 1), date(2024, 6, 30), False, False)
+        ],
+    )
+    writer(window_partition_path(_EARLIER_START, _EARLIER_END, p.detect_root / kind), [row])
+
+    _run(p)
+
+    assert _read_panel(p.out_path)[0][count_column] == 0
+
+
+def test_default_roster_and_voyages_are_this_windows_partitions(tmp_path, monkeypatch):
+    """With mmsi_imo_path/voyages_path left as None, another window's roster rows and voyages
+    must not reach this window's panel."""
+    p = _Paths(tmp_path)
+    _build_minimal_inputs(p, mmsi_imo_rows=[])
+    identity_root = tmp_path / "identity" / "mmsi_imo"
+    voyages_root = tmp_path / "tracks" / "voyages"
+    monkeypatch.setattr(panel, "IDENTITY_ROOT", identity_root)
+    monkeypatch.setattr(panel, "VOYAGES_ROOT", voyages_root)
+    _write_mmsi_imo(
+        window_partition_path(WINDOW_START, WINDOW_END, identity_root),
+        [(219000001, VALID_IMO_A, 50, date(2024, 6, 1), date(2024, 6, 30), False, False)],
+    )
+    _write_mmsi_imo(
+        window_partition_path(_EARLIER_START, _EARLIER_END, identity_root),
+        [(219000002, VALID_IMO_B, 50, _EARLIER_START, _EARLIER_END, False, False)],
+    )
+    _write_voyages(window_partition_path(WINDOW_START, WINDOW_END, voyages_root), [])
+    _write_voyages(
+        window_partition_path(_EARLIER_START, _EARLIER_END, voyages_root),
+        [(219000001, 1, "v1", _EARLIER_TS)],
+    )
+
+    panel.build_panel(
+        WINDOW_START,
+        WINDOW_END,
+        sanctions_matches_path=p.sanctions_matches,
+        detect_root=p.detect_root,
+        ship_type_reference_root=p.ship_type_root,
+        liveness_path=p.liveness,
+        out_path=p.out_path,
+    )
+
+    rows = _read_panel(p.out_path)
+    assert [r["mmsi"] for r in rows] == [219000001]
+    assert rows[0]["voyage_count"] == 0
 
 
 def test_vessel_with_zero_detector_events_gets_zero_not_missing_row(tmp_path):
