@@ -311,7 +311,14 @@ unchanged per the author; if the connection recovers it speeds up by itself. How
 `outputs/logs/build_archive_windows.status` and the size of the zip under `data/tmp/dma-<day>-*/`.
 How to stop, if the author decides to: kill the `bash.exe` running the script and its `python`
 children (check with `Get-Process python`), then re-run the script later -- every step is
-idempotent; a half-downloaded day is re-fetched from scratch. Other agents working in parallel
+idempotent; a half-downloaded day is re-fetched from scratch. **Update 14:05: the April window
+FAILED** -- the connection dropped entirely for a few minutes (`getaddrinfo failed` after three
+read timeouts on 2024-03-02), `ingest/dma.py` exhausted its 5 retries, and the script moved on to
+May as designed (connection back at 14:05, S3 HEAD in <1 s). **April must be retried: after the
+script prints `DONE`, re-run it once** -- finished steps are skipped. Robustness gap found:
+every retry restarts the ~500 MB file from byte 0, which on a slow, flaky connection may never
+finish; S3 supports HTTP Range (206 confirmed), so resuming a partial download in
+`ingest.dma._fetch_day` would fix it -- not changed while the build runs. Other agents working in parallel
 must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans that compete for
 disk).
 Disk: ~272 new days x ~0.47 GB ~ 128 GB of clean data against ~239 GB free, so no pruning needed.
