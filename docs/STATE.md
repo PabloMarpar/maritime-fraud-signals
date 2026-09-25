@@ -296,18 +296,41 @@ _Last updated: 2026-09-25_
 
 ## In progress
 
-Nothing in progress.
+**P4-3b: building every month the DMA archive serves (option A, author's call 2026-09-25).**
+`scripts/build_archive_windows.sh`, launched 2026-09-25 13:47 as a detached process (PID 28256,
+survives the Claude session): windows 2024-04..2025-02 one at a time (March 2024 is only April's
+lead-in; June/November already exist and are only verified), `detect.gaps` per window, then
+`process.sanctions_match --force` and one panel per window at
+`data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
+(START/OK/FAIL per step, `DONE` at the end); per-step logs next to it. Idempotent -- if it dies,
+re-run the same script and it resumes. **Never start a second build over `data/` while it runs.**
+Disk: ~272 new days x ~0.47 GB ~ 128 GB of clean data against ~239 GB free, so no pruning needed.
+Why: P4-3 had 16 training positives and one cutoff; 109 of the vessels already matched in our
+AIS were designated inside the archive period, and designations peak in 2024-Q4 (130) and
+2025-Q1 (225), so a walk-forward evaluation (train on every earlier month with as-of-cutoff
+labels, test on the next) should give ~80-100 training positives and 6-8 cutoffs.
 
 ## Next up
 
-**Decision for the author before P4-4: build more windows?** P4-3's weakest point is 16 training
-positives and one cutoff. The DMA archive serves 2024-03-01..2025-02-26 (see
-`docs/DATA_SOURCES.md`), so two options fit: (a) a **later test window, 2025-02-01..2025-02-26**
-(train June + November, cutoff 2025-02-01: more positives from the Dec 2024 / Jan 2025
-designation waves, plus a second cutoff); (b) an **earlier training window, 2024-04** (after the
-archive's first month, which is its 30-day lead-in). Each costs ~2.5h of `pipeline.window` +
-~10 min of `detect.gaps` + a panel build, and ~20 GB of disk (~239 GB free). Then re-run
-`model.lightgbm_risk` with the pre-registered budgets. Otherwise **P4-4 (calibration)** is next.
+**When P4-3b finishes: extend `model.lightgbm_risk` to a walk-forward evaluation** over every
+monthly cutoff, with the budgets and the no-exposure variant pre-registered in
+`docs/DECISIONS.md`'s P4-3 entry, and report the result per cutoff plus pooled. `sts` is the
+slowest stage (~76 min per window); if the build is too slow, that is the thing to profile, but
+only after the running build finishes. Then **P4-4 (calibration)**.
+
+**Improvement option B -- better signals, not just more data (author: keep as an option).**
+Today's detectors look for *unusual behaviour*, and sanctioned vessels in Danish waters don't
+behave unusually: they transit. What plausibly identifies them instead:
+- **Russian-port link** from our own AIS: declared destinations such as Primorsk / Ust-Luga /
+  St Petersburg (and LOCODEs `RUPRI`, `RULUG`, `RULED` -- see the LOCODE gap in the open questions
+  below), and draught pattern on Baltic transits (eastbound in ballast, westbound laden).
+- **Flag and name changes over time** for the same IMO, visible across the monthly windows once
+  P4-3b lands (flag via MMSI MID change, see `process.mid`).
+- **Global behaviour from GFW** for the vessels in our panel (the Events API is already wired up
+  in `ingest/gfw.py`): port visits to Russian oil terminals, AIS-gap and encounter events
+  anywhere in the world, not only in Danish coverage.
+Each must respect the as-of-cutoff rule (only information public before the cutoff), and the
+Russian-port features need a check that they aren't just a relabelling of the sanctions criteria.
 
 ## Blocked
 
