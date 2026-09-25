@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import duckdb
@@ -100,7 +100,8 @@ def _write_panel(path: Path, start: date, end: date, n: int, seed: int) -> None:
             "ship_type VARCHAR, flag_country VARCHAR, n_gaps BIGINT, "
             "n_draught_change_unexplained BIGINT, rate_gaps_per_voyage DOUBLE, "
             "label_is_sanctioned_as_of_window_end BOOLEAN, "
-            "label_is_sanctioned_after_window_end BOOLEAN, window_start DATE, window_end DATE)"
+            "label_is_sanctioned_after_window_end BOOLEAN, label_earliest_designation_date DATE, "
+            "window_start DATE, window_end DATE)"
         )
         rows = []
         for i in range(n):
@@ -118,11 +119,12 @@ def _write_panel(path: Path, start: date, end: date, n: int, seed: int) -> None:
                     None if i % 7 == 0 else float(rng.uniform(0, 1)),
                     False,
                     positive,
+                    end + timedelta(days=45) if positive else None,
                     start,
                     end,
                 )
             )
-        con.executemany(f"INSERT INTO t VALUES ({', '.join('?' * 13)})", rows)
+        con.executemany(f"INSERT INTO t VALUES ({', '.join('?' * 14)})", rows)
         con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()

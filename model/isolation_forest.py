@@ -140,6 +140,7 @@ class Split:
     features: dict[str, np.ndarray]
     window_start: object
     window_end: object
+    designation_date: np.ndarray | None = None
 
 
 def load_split(name: str, panel_path: Path) -> Split:
@@ -158,6 +159,7 @@ def load_split(name: str, panel_path: Path) -> Split:
         feature_sql = [f"COALESCE(CAST({c} AS DOUBLE), 'NaN'::DOUBLE) AS {c}" for c in columns]
         data = con.execute(
             "SELECT mmsi, year_month, label_is_sanctioned_after_window_end AS label, r2, "
+            "label_earliest_designation_date AS designation_date, "
             f"{', '.join(feature_sql + context_sql)} FROM _pop ORDER BY mmsi, year_month"
         ).fetchnumpy()
     finally:
@@ -171,6 +173,10 @@ def load_split(name: str, panel_path: Path) -> Split:
         features={c: np.asarray(data[c], dtype=float) for c in columns + list(CONTEXT_FEATURES_SQL)},
         window_start=window_start,
         window_end=window_end,
+        designation_date=np.ma.filled(
+            np.ma.asarray(data["designation_date"]).astype("datetime64[D]"),
+            np.datetime64("NaT", "D"),
+        ),
     )
 
 

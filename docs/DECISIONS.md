@@ -1533,3 +1533,39 @@ _2026-09-25_ (P4-2: Isolation Forest, first out-of-time evaluation)
   June's labels would be learning November-period outcomes; P4-3 must cap the training label at
   designations in (train window_end, test window_start). Design was fixed before looking at
   November; no sign flip applied after seeing AUC < 0.5.
+
+_2026-09-25_ (P4-3: LightGBM, one out-of-time cutoff)
+
+- **Training label is as-of-cutoff, not `label_is_sanctioned_after_window_end`.** Positive iff
+  designated in (train window_end, test window_start) = (2024-06-30, 2024-11-01); every other
+  training row is negative, including the 121 June vessels designated after 2024-11-30 (excluding
+  them would itself use future information; labelling them negative is the conservative choice
+  and can only hurt the test result -- 42 of them are November positives). **This leaves 16
+  training positives, all tankers** -- the binding constraint on everything below.
+- **Result (test = November, k = 574 = R2's flags):** `context` (is_tanker, is_foc) reproduces R2's
+  flagged set exactly (0.204, verdict `reproduces_r2`, a sanity check that the pipeline learns the
+  rule when given only its inputs); `detectors` alone 0.143, loses (CI [-0.088, -0.036]);
+  `detectors_context` 0.214 vs 0.204, CI [-0.003, +0.025] -> **no significant difference**.
+  Refitting on resampled training rows moves it 0.192-0.218. The primary test can barely move by
+  construction: with 139 test positives the best possible precision@574 is 0.242 (+0.038 over R2).
+- **Secondary, post hoc (added after the first run, not evidence):** `detectors_context` ranks
+  better than `context` overall (AUC +0.033, paired CI [+0.023, +0.042]) -- detectors add some
+  ranking signal on top of R2's two inputs. AUC against R2 itself (0.953 vs 0.868) is NOT reported
+  as a finding: R2 is binary, and `is_tanker` alone already scores 0.879. The detectors-only
+  signal is partly real (per `analyst-review`: detectors-only AUC 0.796 within tankers, 0.754
+  within R2) but its top feature is exposure (`n_observed_hours`, fewer hours -> riskier), which
+  may encode route/transit through Danish waters rather than evasion.
+- **Pre-registered now, for the next window's evaluation (frozen by this commit):** (1) alert
+  budgets k = 50, 100, 200 alongside the matched k, since k = 574 has almost no headroom --
+  post hoc these look strong (0.37-0.38 at k = 50-200) but cannot be claimed from this window;
+  (2) a `detectors_context` variant without exposure columns (`n_observed_hours`,
+  `n_observed_days`, `total_message_count`, `voyage_count`); (3) AUC difference vs `context` as a
+  secondary test. Variants and PARAMS unchanged.
+- **`analyst-review`: no blockers, no temporal leak.** Confirmed designation_date never enters X
+  (now also a test), no identity memorization (the higher "seen in June" AUC comes from the 42
+  trained-as-negative positives, i.e. it works against the model). Acted on: `reproduces_r2`
+  verdict, precision ceiling, training-row refit bootstrap (test-row CIs are conditional on one
+  fitted model), post-hoc AUC-diff vs context, docstring now states one cutoff (not rolling),
+  the 4- vs ~22-month label-horizon mismatch, scores-not-probabilities, and that "not tuned on
+  test" is an author statement frozen by the commit, not independently verifiable.
+- **No GPU.** Full run incl. 3x200 refits ~70s on CPU.

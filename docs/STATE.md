@@ -284,21 +284,30 @@ _Last updated: 2026-09-25_
   `analyst-review`: no blockers; its should-fixes applied (see `docs/DECISIONS.md`). 491 tests,
   `ruff` clean.
 
+- **P4-3 done: LightGBM ties R2, does not beat it, 2026-09-25.** `model/lightgbm_risk.py`: one
+  cutoff (train June, test November), as-of-cutoff training label -- positive only if designated
+  in (2024-06-30, 2024-11-01) -- which leaves **16 training positives** (all tankers). At k = 574:
+  `context` (is_tanker, is_foc) reproduces R2 exactly (0.204); `detectors` alone 0.143, loses;
+  `detectors_context` 0.214, CI [-0.003, +0.025], **no significant difference** (ceiling 0.242,
+  i.e. at most +0.038 was possible). Post hoc only: detectors improve ranking over `context` (AUC
+  +0.033 [0.023, 0.042]). Budgets k = 50/100/200 and a no-exposure variant are pre-registered for
+  the next window in `docs/DECISIONS.md`. `analyst-review`: no blockers. `lightgbm` 4.7.0
+  installed into the environment (was in `requirements.txt`, not installed).
+
 ## In progress
 
 Nothing in progress.
 
 ## Next up
 
-**P4-3 (LightGBM with rolling temporal cutoffs).** Train on the June panel, test on November, same
-matched-budget comparison against R2 as `model/isolation_forest.py`. **Before training: cap
-June's training label at designations in (2024-06-30, 2024-11-01)** -- 121 of June's 147 forward
-positives were designated after 2024-11-30, i.e. they are November-period outcomes (see
-`model/isolation_forest.py`'s docstring and `docs/DECISIONS.md`'s P4-2 entry). Only one window
-pair exists, so "rolling cutoffs" is one cutoff unless more windows are built. The P3-3
-rolling-cutoff blockers (`sts` repetition, `synthetic_circle` backdating, whole-window static
-features) matter only for intra-window cutoffs; one panel per window sidesteps them. GPU
-(`device="gpu"`) is not worth it at ~5k rows.
+**Decision for the author before P4-4: build more windows?** P4-3's weakest point is 16 training
+positives and one cutoff. The DMA archive serves 2024-03-01..2025-02-26 (see
+`docs/DATA_SOURCES.md`), so two options fit: (a) a **later test window, 2025-02-01..2025-02-26**
+(train June + November, cutoff 2025-02-01: more positives from the Dec 2024 / Jan 2025
+designation waves, plus a second cutoff); (b) an **earlier training window, 2024-04** (after the
+archive's first month, which is its 30-day lead-in). Each costs ~2.5h of `pipeline.window` +
+~10 min of `detect.gaps` + a panel build, and ~20 GB of disk (~239 GB free). Then re-run
+`model.lightgbm_risk` with the pre-registered budgets. Otherwise **P4-4 (calibration)** is next.
 
 ## Blocked
 
