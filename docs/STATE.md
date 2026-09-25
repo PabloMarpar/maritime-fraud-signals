@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-23_
+_Last updated: 2026-09-25_
 
 ## Done
 
@@ -240,32 +240,47 @@ _Last updated: 2026-09-23_
   project's `data/` folder, plausibly contributing to that lock contention and to `check_on_land`
   running >2x slower than the real June baseline (94.3 min documented) -- the user asked for a
   Defender exclusion but the auto-mode classifier blocked `Add-MpPreference` as a system security
-  change, so it needs the user to run it directly, still not done.
+  change, so it needed the user to run it directly. **Resolved 2026-09-25: see the P4-1b entry
+  below** -- the user applied the exclusion, and `on_land` was also parallelized.
+
+- **P4-1b done: second real window (2024-11-01..2024-11-30) finished and verified, 2026-09-25.**
+  Resumed with `python -m pipeline.window --start 2024-11-01 --end 2024-11-30` (idempotent, skipped
+  everything already banked). Two real fixes landed first: the user applied the Windows Defender
+  real-time-protection exclusion for `data/` directly (elevated PowerShell -- Claude Code's
+  auto-mode classifier blocks `Add-MpPreference` itself as a security-weakening action, confirmed
+  again this session); and `detect/spoofing.py`'s `check_on_land` was parallelized -- its per-day
+  point-in-polygon join ran in a single Python `for` loop over one shared DuckDB connection (~18%
+  CPU use measured last session, 3 of 16 logical threads). Now runs on an 8-worker
+  `ThreadPoolExecutor` (`ON_LAND_MAX_WORKERS`), each worker on its own `con.cursor()`. Required
+  changing `_land_pieces` from a `TEMP TABLE` to a regular `TABLE`: verified empirically first that
+  `cursor()`-derived connections cannot see the parent connection's TEMP tables, only the shared
+  catalog (regular tables, and the loaded spatial extension, are visible fine). 476 tests pass,
+  `ruff` clean. **Combined effect, real run:** `on_land` finished in 58 min -- faster than even the
+  healthy June baseline (94.3 min), not just the >2x-degraded November one. Full window (30 days)
+  completed and verified end to end in 2h25min wall-clock (09:31-11:57): spoofing checks 61.5 min
+  (8,237,660 events: `impossible_speed` 2,398, `on_land` 8,234,803, `synthetic_circle` 36,
+  `simultaneous_position` 423), `sts` 76 min (502 candidates survive the hard gates, mean confidence
+  0.356 -- see Open questions below, this stage was NOT sped up and is now the slowest one),
+  `behaviour` 1.6 min (864 events: 140 `destination_course_mismatch`, 724
+  `draught_change_unexplained`), `identity_anomalies` 5.2 min (199 events: 66 `no_valid_imo`, 35
+  `name_flapping`, 19 `name_change`, 20 `callsign_flapping`, 9 `callsign_change`, 38 `shared_imo`,
+  12 `shared_identity`). `Window 2024-11-01..2024-11-30 verified and recorded (30 day(s))` --
+  `_verify_window` passed for every day.
 
 ## In progress
 
-**Second real window (2024-11-01..2024-11-30): everything through the anchorage mask and
-`impossible_speed` is built and safely on disk (see Done above); `detect.spoofing`'s `on_land`
-check onward was never finished** -- killed mid-run for a planned machine shutdown, 2026-09-23.
-Confirmed clean stop: no partial output file was ever written (the four spoofing checks only get
-written to disk together, at the end), no `verified_at` was recorded for any November day
-(verification never ran), no stray temp files left behind. **Nothing built so far needs to be
-redone.** Remaining: `on_land`, `synthetic_circle`, `simultaneous_position`, then
-`sts`/`behaviour`/`identity_anomalies`, then `_verify_window` and the manifest fingerprint.
-**To resume:** `python -m pipeline.window --start 2024-11-01 --end 2024-11-30` (idempotent --
-skips everything already built). Consider first confirming the Defender exclusion got applied, and
-double-checking no stray `python.exe` is already running before relaunching (see the operational
-lesson in Done above).
+Nothing in progress.
 
 ## Next up
 
-**Finish the second window (see "In progress" above), then P4-2 (Isolation Forest on the
-vessel-month features)** -- `model/baseline.py`'s R1/R2 (compare against their `precision` column,
-never `precision_at_20` -- see `CLAUDE.md`) and `baseline_scores.parquet`'s `tier` column are the
-target to beat; population must stay restricted to `imo IS NOT NULL` per `features.panel`'s hard
-blocker (see P3-3 above). Once the second window verifies, P4-2/P4-3 can finally do an honest
-temporal train/test split (train on the earlier window, evaluate on the later one) instead of the
-in-sample-only reporting R1/R2 were limited to.
+**P4-2 (Isolation Forest on the vessel-month features).** Both windows (2024-06, 2024-11) are now
+built and verified, so P4-2/P4-3 can finally do an honest temporal train/test split (train on the
+earlier window, evaluate on the later one) instead of the in-sample-only reporting R1/R2 were
+limited to. `model/baseline.py`'s R1/R2 (compare against their `precision` column, never
+`precision_at_20` -- see `CLAUDE.md`) and `baseline_scores.parquet`'s `tier` column are the target
+to beat; population must stay restricted to `imo IS NOT NULL` per `features.panel`'s hard blocker
+(see P3-3 above). `features/panel.py` has not yet been run/extended to build a labelled panel over
+the November window -- check whether P4-2 needs that first.
 
 ## Blocked
 
@@ -273,14 +288,13 @@ in-sample-only reporting R1/R2 were limited to.
 
 ## Open questions
 
-- **`ingest/dma.py`'s `download_day` has no retry/backoff logic and a fixed default client
-  timeout, so a mid-transfer `httpx.ReadTimeout` fails the whole day outright.** Confirmed real
-  during P3-4/A5's A0.4 drill (2026-09-22): re-downloading a single real day (2024-06-15, ~189 MB
-  zip) needed 4 attempts before one succeeded, including two failures even at a 300s read timeout
-  after 89-181 MB had already streamed -- read as this session's network being flaky against the
-  S3 endpoint, not a DMA-side outage (every retry from byte zero eventually succeeded). Worth a
-  retry wrapper (e.g. a handful of attempts with backoff) before `pipeline.window`/`pipeline.prune`
-  are run unattended over many days; not fixed here, out of scope for A5 itself.
+- **`detect/sts.py`'s November run took 76 min, 4x the June baseline (17.6 min), with a ~62-minute
+  gap where nothing is logged before its named stages (`slots`, `pair_slots`, `episodes`, `gated`,
+  `scored`) begin.** Observed 2026-09-25 during P4-1b's real run, right after `on_land` was
+  parallelized and ran faster than ever -- so this isn't the same class of fix. Not investigated:
+  candidates are unlogged setup (loading tracks/anchorages, building candidate pairs) being slow,
+  or the same kind of serial-per-partition loop `check_on_land` had. Worth a dedicated look if
+  `sts` needs rerunning often; not urgent for P4-2.
 - **`detect/spoofing.py`'s `check_impossible_speed` has no tie-break on its `lag() OVER (PARTITION
   BY mmsi ORDER BY timestamp)` window, so its event count is non-deterministic across reruns when
   an mmsi has duplicate `(mmsi, timestamp)` rows** -- confirmed real during P3-4/A2's equivalence
@@ -404,8 +418,8 @@ in-sample-only reporting R1/R2 were limited to.
 
 ## Disk budget — read before downloading more days
 
-**~80 GB free** (of 931 GB) as of 2026-09-19 (not re-measured this session; last real check
-2026-09-18). `data/clean/` for the 30-day window is ~14 GB.
+**~239 GB free** (of 931 GB) as of 2026-09-25 (re-measured this session). `data/clean/` now holds
+both real windows (June + November's 60-day lead-in/window) at ~37 GB total.
 `data/identity/` and `data/tracks/` together are a few MB; `data/coverage/` is ~123 MB (the
 legacy `liveness.parquet`, ~65 MB, plus the new partitioned `liveness/`, ~58 MB, both present at
 once post-P3-4/A1 migration — the legacy file is not deleted until P3-4/A5's `prune.py` exists and

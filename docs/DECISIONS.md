@@ -1452,3 +1452,30 @@ _2026-09-23_ (second real window: the DMA archive is not "2006 onwards" as docum
   that its own wrapper/log reported completion) before launching another one against the same data
   directory — Windows background process tracking in this environment does not guarantee a killed
   or superseded shell also kills its python child.
+
+_2026-09-25_ (P4-1b close: on_land parallelized, second window finished)
+
+- **`detect/spoofing.py`'s `check_on_land` was parallelized (8-worker `ThreadPoolExecutor` over
+  day partitions instead of a serial Python `for` loop), to use more of this machine's CPU
+  headroom (see the [[feedback-hardware-parallelism]] memory note).** Reason: last session's real
+  run measured only ~18% CPU use (3 of 16 logical threads) during this check, because the per-day
+  point-in-polygon join ran one at a time over a single shared DuckDB connection. Real result: 58
+  min for the November 30-day run, faster than even the healthy June baseline (94.3 min), not just
+  the >2x-degraded November-before-the-fix one.
+- **`_land_pieces` changed from a `TEMP TABLE` to a regular `TABLE` as a required part of the
+  parallelization above, not a style choice.** Reason: verified empirically before trusting the
+  change that DuckDB connections created via `con.cursor()` (one per worker thread) cannot see the
+  parent connection's TEMP tables — only the shared catalog. Regular tables, and the already-loaded
+  spatial extension, are visible fine from every cursor with no extra `LOAD spatial` call needed.
+  Without this fix, every worker thread would have failed with a real Catalog Error.
+- **The Windows Defender real-time-protection exclusion for `data/`, requested last session, is
+  now applied** — the user ran `Add-MpPreference` directly in an elevated PowerShell, after Claude
+  Code's own auto-mode classifier again refused to run it (flagged `[Security Weaken]`, consistent
+  with last session). Not independently re-measured in isolation from the `on_land` parallelization
+  above, since both landed in the same run — see the combined real timing in `docs/STATE.md`'s
+  P4-1b entry.
+- **`detect/sts.py` was NOT parallelized this session and is now the slowest stage (76 min for
+  November, vs. 17.6 min for June) — left as an open question, not chased down.** Reason: its own
+  ~62-minute unlogged gap before named stages begin was only noticed after `on_land`'s fix had
+  already made it the new bottleneck; diagnosing it (unlogged setup cost vs. a similar serial-loop
+  pattern) is separate work, not blocking P4-2. See `docs/STATE.md`'s Open questions.

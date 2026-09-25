@@ -110,6 +110,7 @@ One shared DuckDB connection is opened once and reused across all four checks, m
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
 import math
 from dataclasses import dataclass
@@ -158,6 +159,11 @@ BBOX_OUTLIER_QUANTILE = 0.001
 # of magnitude finer than COASTAL_EROSION_DEG, so it does not meaningfully change which points are
 # flagged, only how many vertices ST_Contains has to test against.
 LAND_SIMPLIFY_TOLERANCE_DEG = 0.001
+
+# check_on_land's per-day join runs on a thread pool instead of one Python-level loop: a real
+# 30-day run measured only ~18% CPU use (the day loop was the serial part; each day's own query
+# only partially uses DuckDB's internal thread pool). 8 matches this machine's physical core count.
+ON_LAND_MAX_WORKERS = 8
 
 # Check 3: synthetic circles.
 MIN_POINTS_FOR_CIRCLE = 20
@@ -323,23 +329,30 @@ def check_on_land(
         f"POLYGON(({lon_min - m} {lat_min - m}, {lon_max + m} {lat_min - m}, "
         f"{lon_max + m} {lat_max + m}, {lon_min - m} {lat_max + m}, {lon_min - m} {lat_min - m}))"
     )
+    # A regular (not TEMP) table: cursor()-derived connections used by the thread pool below do
+    # not see the parent connection's TEMP tables (confirmed empirically), only the shared catalog.
     con.execute(
-        "CREATE OR REPLACE TEMP TABLE _land_pieces AS "
+        "CREATE OR REPLACE TABLE _land_pieces AS "
         "SELECT ST_SimplifyPreserveTopology(ST_Buffer(piece, ?), ?) AS geom FROM ("
         "  SELECT ST_Intersection((UNNEST(ST_Dump(geom))).geom, ST_GeomFromText(?)) AS piece "
         "  FROM read_parquet(?)"
         ") WHERE NOT ST_IsEmpty(piece)",
         [-COASTAL_EROSION_DEG, LAND_SIMPLIFY_TOLERANCE_DEG, bbox_wkt, str(land_path)],
     )
+
+    def _query_day(path: Path) -> list[tuple]:
+        # con.cursor(): an independent connection sharing this database, safe to use
+        # concurrently from a worker thread -- unlike reusing `con` itself across threads.
+        return con.cursor().execute(
+            "SELECT DISTINCT a.mmsi, a.timestamp, a.latitude, a.longitude "
+            f"FROM read_parquet('{path.as_posix()}') a, _land_pieces l "
+            "WHERE ST_Contains(l.geom, ST_Point(a.longitude, a.latitude))"
+        ).fetchall()
+
     rows: list[tuple] = []
-    for _day, path in partitions:
-        rows.extend(
-            con.execute(
-                "SELECT DISTINCT a.mmsi, a.timestamp, a.latitude, a.longitude "
-                f"FROM read_parquet('{path.as_posix()}') a, _land_pieces l "
-                "WHERE ST_Contains(l.geom, ST_Point(a.longitude, a.latitude))"
-            ).fetchall()
-        )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ON_LAND_MAX_WORKERS) as pool:
+        for result in pool.map(_query_day, (path for _day, path in partitions)):
+            rows.extend(result)
 
     return [
         SpoofingEvent(

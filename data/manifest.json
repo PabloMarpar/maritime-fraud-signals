@@ -566,269 +566,599 @@
     "clean_rows": 9121383,
     "cleaned_at": "2026-09-23T14:00:29.273097+00:00",
     "downloaded_at": "2026-09-23T13:59:36.271784+00:00",
+    "fingerprint_bbox": [
+      53.88,
+      58.21,
+      4.03,
+      16.96
+    ],
+    "fingerprint_max_timestamp": "2024-11-01T23:59:58",
+    "fingerprint_message_count": 9121383,
+    "fingerprint_min_timestamp": "2024-11-01T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2991,
     "raw_bytes": 463678314,
     "raw_discarded_at": "2026-09-23T14:00:29.321081+00:00",
-    "raw_rows": 15325571
+    "raw_rows": 15325571,
+    "verified_at": "2026-09-25T09:56:13.209068+00:00"
   },
   "2024-11-02": {
     "clean_bytes": 400525875,
     "clean_rows": 9420581,
     "cleaned_at": "2026-09-23T14:03:18.479862+00:00",
     "downloaded_at": "2026-09-23T14:02:19.618977+00:00",
+    "fingerprint_bbox": [
+      53.78,
+      58.25,
+      4.09,
+      15.95
+    ],
+    "fingerprint_max_timestamp": "2024-11-02T23:59:58",
+    "fingerprint_message_count": 9420581,
+    "fingerprint_min_timestamp": "2024-11-02T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3237,
     "raw_bytes": 482839693,
     "raw_discarded_at": "2026-09-23T14:03:18.521573+00:00",
-    "raw_rows": 15938596
+    "raw_rows": 15938596,
+    "verified_at": "2026-09-25T09:56:14.592717+00:00"
   },
   "2024-11-03": {
     "clean_bytes": 401060486,
     "clean_rows": 9406105,
     "cleaned_at": "2026-09-23T14:06:16.110991+00:00",
     "downloaded_at": "2026-09-23T14:05:14.667403+00:00",
+    "fingerprint_bbox": [
+      53.56,
+      58.36,
+      3.44,
+      16.1
+    ],
+    "fingerprint_max_timestamp": "2024-11-03T23:59:58",
+    "fingerprint_message_count": 9406105,
+    "fingerprint_min_timestamp": "2024-11-03T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3511,
     "raw_bytes": 486437244,
     "raw_discarded_at": "2026-09-23T14:06:16.163549+00:00",
-    "raw_rows": 15947176
+    "raw_rows": 15947176,
+    "verified_at": "2026-09-25T09:56:15.958507+00:00"
   },
   "2024-11-04": {
     "clean_bytes": 419111086,
     "clean_rows": 9808530,
     "cleaned_at": "2026-09-23T14:09:24.783592+00:00",
     "downloaded_at": "2026-09-23T14:08:15.164830+00:00",
+    "fingerprint_bbox": [
+      53.56,
+      58.54,
+      3.34,
+      17.04
+    ],
+    "fingerprint_max_timestamp": "2024-11-04T23:59:58",
+    "fingerprint_message_count": 9808530,
+    "fingerprint_min_timestamp": "2024-11-04T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3673,
     "raw_bytes": 518742207,
     "raw_discarded_at": "2026-09-23T14:09:24.830311+00:00",
-    "raw_rows": 16996410
+    "raw_rows": 16996410,
+    "verified_at": "2026-09-25T09:56:17.332917+00:00"
   },
   "2024-11-05": {
     "clean_bytes": 437461838,
     "clean_rows": 10163749,
     "cleaned_at": "2026-09-23T14:13:02.438990+00:00",
     "downloaded_at": "2026-09-23T14:11:42.610284+00:00",
+    "fingerprint_bbox": [
+      53.49,
+      58.83,
+      3.15,
+      17.91
+    ],
+    "fingerprint_max_timestamp": "2024-11-05T23:59:58",
+    "fingerprint_message_count": 10163749,
+    "fingerprint_min_timestamp": "2024-11-05T00:00:00",
+    "fingerprint_n_distinct_mmsi": 4199,
     "raw_bytes": 561111331,
     "raw_discarded_at": "2026-09-23T14:13:02.482284+00:00",
-    "raw_rows": 18406644
+    "raw_rows": 18406644,
+    "verified_at": "2026-09-25T09:56:18.718580+00:00"
   },
   "2024-11-06": {
     "clean_bytes": 452198885,
     "clean_rows": 10518992,
     "cleaned_at": "2026-09-23T14:17:09.336025+00:00",
     "downloaded_at": "2026-09-23T14:15:40.481638+00:00",
+    "fingerprint_bbox": [
+      53.5,
+      58.86,
+      3.21,
+      17.93
+    ],
+    "fingerprint_max_timestamp": "2024-11-06T23:59:58",
+    "fingerprint_message_count": 10518992,
+    "fingerprint_min_timestamp": "2024-11-06T00:00:00",
+    "fingerprint_n_distinct_mmsi": 4233,
     "raw_bytes": 607204876,
     "raw_discarded_at": "2026-09-23T14:17:09.393477+00:00",
-    "raw_rows": 20161879
+    "raw_rows": 20161879,
+    "verified_at": "2026-09-25T09:56:20.105991+00:00"
   },
   "2024-11-07": {
     "clean_bytes": 442257021,
     "clean_rows": 10289792,
     "cleaned_at": "2026-09-23T14:20:56.969273+00:00",
     "downloaded_at": "2026-09-23T14:19:30.026630+00:00",
+    "fingerprint_bbox": [
+      53.5,
+      58.97,
+      3.4,
+      17.73
+    ],
+    "fingerprint_max_timestamp": "2024-11-07T23:59:58",
+    "fingerprint_message_count": 10289792,
+    "fingerprint_min_timestamp": "2024-11-07T00:00:00",
+    "fingerprint_n_distinct_mmsi": 4039,
     "raw_bytes": 581671543,
     "raw_discarded_at": "2026-09-23T14:20:57.056571+00:00",
-    "raw_rows": 19258322
+    "raw_rows": 19258322,
+    "verified_at": "2026-09-25T09:56:21.502620+00:00"
   },
   "2024-11-08": {
     "clean_bytes": 422377469,
     "clean_rows": 9870935,
     "cleaned_at": "2026-09-23T14:24:42.231931+00:00",
     "downloaded_at": "2026-09-23T14:23:16.923894+00:00",
+    "fingerprint_bbox": [
+      53.59,
+      58.97,
+      3.59,
+      17.82
+    ],
+    "fingerprint_max_timestamp": "2024-11-08T23:59:58",
+    "fingerprint_message_count": 9870935,
+    "fingerprint_min_timestamp": "2024-11-08T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3740,
     "raw_bytes": 549524027,
     "raw_discarded_at": "2026-09-23T14:24:42.303451+00:00",
-    "raw_rows": 18191655
+    "raw_rows": 18191655,
+    "verified_at": "2026-09-25T09:56:22.863131+00:00"
   },
   "2024-11-09": {
     "clean_bytes": 426722793,
     "clean_rows": 9960682,
     "cleaned_at": "2026-09-23T14:28:30.359169+00:00",
     "downloaded_at": "2026-09-23T14:27:01.360310+00:00",
+    "fingerprint_bbox": [
+      53.56,
+      58.39,
+      4.12,
+      17.36
+    ],
+    "fingerprint_max_timestamp": "2024-11-09T23:59:58",
+    "fingerprint_message_count": 9960682,
+    "fingerprint_min_timestamp": "2024-11-09T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3736,
     "raw_bytes": 545701190,
     "raw_discarded_at": "2026-09-23T14:28:30.411520+00:00",
-    "raw_rows": 17868200
+    "raw_rows": 17868200,
+    "verified_at": "2026-09-25T09:56:24.194318+00:00"
   },
   "2024-11-10": {
     "clean_bytes": 399484279,
     "clean_rows": 9378652,
     "cleaned_at": "2026-09-23T14:32:02.873066+00:00",
     "downloaded_at": "2026-09-23T14:30:39.842279+00:00",
+    "fingerprint_bbox": [
+      53.73,
+      58.23,
+      4.01,
+      17.77
+    ],
+    "fingerprint_max_timestamp": "2024-11-10T23:59:58",
+    "fingerprint_message_count": 9378652,
+    "fingerprint_min_timestamp": "2024-11-10T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3307,
     "raw_bytes": 498692249,
     "raw_discarded_at": "2026-09-23T14:32:02.923607+00:00",
-    "raw_rows": 16488134
+    "raw_rows": 16488134,
+    "verified_at": "2026-09-25T09:56:25.528040+00:00"
   },
   "2024-11-11": {
     "clean_bytes": 383374088,
     "clean_rows": 9058941,
     "cleaned_at": "2026-09-23T14:35:19.428559+00:00",
     "downloaded_at": "2026-09-23T14:33:59.277943+00:00",
+    "fingerprint_bbox": [
+      54.11,
+      58.21,
+      3.94,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-11T23:59:58",
+    "fingerprint_message_count": 9058941,
+    "fingerprint_min_timestamp": "2024-11-11T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2787,
     "raw_bytes": 467711758,
     "raw_discarded_at": "2026-09-23T14:35:19.474656+00:00",
-    "raw_rows": 15575703
+    "raw_rows": 15575703,
+    "verified_at": "2026-09-25T09:56:26.805964+00:00"
   },
   "2024-11-12": {
     "clean_bytes": 398355562,
     "clean_rows": 9379122,
     "cleaned_at": "2026-09-23T14:38:59.471319+00:00",
     "downloaded_at": "2026-09-23T14:37:32.800392+00:00",
+    "fingerprint_bbox": [
+      54.13,
+      58.72,
+      4.09,
+      16.0
+    ],
+    "fingerprint_max_timestamp": "2024-11-12T23:59:58",
+    "fingerprint_message_count": 9379122,
+    "fingerprint_min_timestamp": "2024-11-12T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3024,
     "raw_bytes": 503036915,
     "raw_discarded_at": "2026-09-23T14:38:59.518829+00:00",
-    "raw_rows": 16814817
+    "raw_rows": 16814817,
+    "verified_at": "2026-09-25T09:56:28.057460+00:00"
   },
   "2024-11-13": {
     "clean_bytes": 405977352,
     "clean_rows": 9537374,
     "cleaned_at": "2026-09-23T14:42:46.142554+00:00",
     "downloaded_at": "2026-09-23T14:41:15.489010+00:00",
+    "fingerprint_bbox": [
+      53.91,
+      58.98,
+      3.21,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-13T23:59:58",
+    "fingerprint_message_count": 9537374,
+    "fingerprint_min_timestamp": "2024-11-13T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3478,
     "raw_bytes": 521436309,
     "raw_discarded_at": "2026-09-23T14:42:46.193312+00:00",
-    "raw_rows": 17486402
+    "raw_rows": 17486402,
+    "verified_at": "2026-09-25T09:56:29.413159+00:00"
   },
   "2024-11-14": {
     "clean_bytes": 420839331,
     "clean_rows": 9870447,
     "cleaned_at": "2026-09-23T14:46:46.247972+00:00",
     "downloaded_at": "2026-09-23T14:45:07.484292+00:00",
+    "fingerprint_bbox": [
+      53.57,
+      58.88,
+      3.13,
+      16.11
+    ],
+    "fingerprint_max_timestamp": "2024-11-14T23:59:58",
+    "fingerprint_message_count": 9870447,
+    "fingerprint_min_timestamp": "2024-11-14T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3846,
     "raw_bytes": 535496752,
     "raw_discarded_at": "2026-09-23T14:46:46.298993+00:00",
-    "raw_rows": 17810869
+    "raw_rows": 17810869,
+    "verified_at": "2026-09-25T09:56:30.731885+00:00"
   },
   "2024-11-15": {
     "clean_bytes": 424403094,
     "clean_rows": 9958131,
     "cleaned_at": "2026-09-23T14:50:50.777998+00:00",
     "downloaded_at": "2026-09-23T14:49:08.739796+00:00",
+    "fingerprint_bbox": [
+      53.59,
+      58.69,
+      3.41,
+      16.8
+    ],
+    "fingerprint_max_timestamp": "2024-11-15T23:59:58",
+    "fingerprint_message_count": 9958131,
+    "fingerprint_min_timestamp": "2024-11-15T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3739,
     "raw_bytes": 538806181,
     "raw_discarded_at": "2026-09-23T14:50:50.844857+00:00",
-    "raw_rows": 17864000
+    "raw_rows": 17864000,
+    "verified_at": "2026-09-25T09:56:32.072832+00:00"
   },
   "2024-11-16": {
     "clean_bytes": 413164054,
     "clean_rows": 9727990,
     "cleaned_at": "2026-09-23T14:54:49.883486+00:00",
     "downloaded_at": "2026-09-23T14:53:09.943697+00:00",
+    "fingerprint_bbox": [
+      53.66,
+      58.26,
+      3.83,
+      16.92
+    ],
+    "fingerprint_max_timestamp": "2024-11-16T23:59:58",
+    "fingerprint_message_count": 9727990,
+    "fingerprint_min_timestamp": "2024-11-16T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3132,
     "raw_bytes": 506893975,
     "raw_discarded_at": "2026-09-23T14:54:49.929463+00:00",
-    "raw_rows": 16788378
+    "raw_rows": 16788378,
+    "verified_at": "2026-09-25T09:56:33.414053+00:00"
   },
   "2024-11-17": {
     "clean_bytes": 387456502,
     "clean_rows": 9180539,
     "cleaned_at": "2026-09-23T14:58:33.563620+00:00",
     "downloaded_at": "2026-09-23T14:56:59.493614+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.25,
+      3.95,
+      16.01
+    ],
+    "fingerprint_max_timestamp": "2024-11-17T23:59:58",
+    "fingerprint_message_count": 9180539,
+    "fingerprint_min_timestamp": "2024-11-17T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2532,
     "raw_bytes": 473195895,
     "raw_discarded_at": "2026-09-23T14:58:33.605487+00:00",
-    "raw_rows": 15818932
+    "raw_rows": 15818932,
+    "verified_at": "2026-09-25T09:56:34.675612+00:00"
   },
   "2024-11-18": {
     "clean_bytes": 381665926,
     "clean_rows": 9045347,
     "cleaned_at": "2026-09-23T15:02:10.997676+00:00",
     "downloaded_at": "2026-09-23T15:00:38.339692+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.27,
+      4.26,
+      15.99
+    ],
+    "fingerprint_max_timestamp": "2024-11-18T23:59:58",
+    "fingerprint_message_count": 9045347,
+    "fingerprint_min_timestamp": "2024-11-18T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2560,
     "raw_bytes": 457089330,
     "raw_discarded_at": "2026-09-23T15:02:11.052235+00:00",
-    "raw_rows": 15300616
+    "raw_rows": 15300616,
+    "verified_at": "2026-09-25T09:56:35.876385+00:00"
   },
   "2024-11-19": {
     "clean_bytes": 393094405,
     "clean_rows": 9272883,
     "cleaned_at": "2026-09-23T15:06:07.447060+00:00",
     "downloaded_at": "2026-09-23T15:04:28.712454+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.25,
+      3.89,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-19T23:59:58",
+    "fingerprint_message_count": 9272883,
+    "fingerprint_min_timestamp": "2024-11-19T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2688,
     "raw_bytes": 481099319,
     "raw_discarded_at": "2026-09-23T15:06:07.487028+00:00",
-    "raw_rows": 16140495
+    "raw_rows": 16140495,
+    "verified_at": "2026-09-25T09:56:37.153382+00:00"
   },
   "2024-11-20": {
     "clean_bytes": 395217065,
     "clean_rows": 9310885,
     "cleaned_at": "2026-09-23T15:10:01.735156+00:00",
     "downloaded_at": "2026-09-23T15:08:22.515745+00:00",
+    "fingerprint_bbox": [
+      53.88,
+      58.25,
+      4.26,
+      15.94
+    ],
+    "fingerprint_max_timestamp": "2024-11-20T23:59:58",
+    "fingerprint_message_count": 9310885,
+    "fingerprint_min_timestamp": "2024-11-20T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2698,
     "raw_bytes": 480483210,
     "raw_discarded_at": "2026-09-23T15:10:01.801818+00:00",
-    "raw_rows": 16045909
+    "raw_rows": 16045909,
+    "verified_at": "2026-09-25T09:56:38.437316+00:00"
   },
   "2024-11-21": {
     "clean_bytes": 387222741,
     "clean_rows": 9157250,
     "cleaned_at": "2026-09-23T15:13:50.985535+00:00",
     "downloaded_at": "2026-09-23T15:12:12.568799+00:00",
+    "fingerprint_bbox": [
+      54.06,
+      58.19,
+      3.9,
+      15.97
+    ],
+    "fingerprint_max_timestamp": "2024-11-21T23:59:58",
+    "fingerprint_message_count": 9157250,
+    "fingerprint_min_timestamp": "2024-11-21T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2692,
     "raw_bytes": 479057249,
     "raw_discarded_at": "2026-09-23T15:13:51.037543+00:00",
-    "raw_rows": 16089042
+    "raw_rows": 16089042,
+    "verified_at": "2026-09-25T09:56:39.655186+00:00"
   },
   "2024-11-22": {
     "clean_bytes": 380000395,
     "clean_rows": 8971749,
     "cleaned_at": "2026-09-23T15:17:33.424721+00:00",
     "downloaded_at": "2026-09-23T15:15:56.519501+00:00",
+    "fingerprint_bbox": [
+      54.11,
+      58.24,
+      3.85,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-22T23:59:58",
+    "fingerprint_message_count": 8971749,
+    "fingerprint_min_timestamp": "2024-11-22T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2657,
     "raw_bytes": 466372691,
     "raw_discarded_at": "2026-09-23T15:17:33.462750+00:00",
-    "raw_rows": 15689687
+    "raw_rows": 15689687,
+    "verified_at": "2026-09-25T09:56:40.888770+00:00"
   },
   "2024-11-23": {
     "clean_bytes": 379571616,
     "clean_rows": 8984393,
     "cleaned_at": "2026-09-23T15:21:15.756992+00:00",
     "downloaded_at": "2026-09-23T15:19:40.064454+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.27,
+      4.24,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-23T23:59:58",
+    "fingerprint_message_count": 8984393,
+    "fingerprint_min_timestamp": "2024-11-23T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2570,
     "raw_bytes": 467805146,
     "raw_discarded_at": "2026-09-23T15:21:15.804733+00:00",
-    "raw_rows": 15726225
+    "raw_rows": 15726225,
+    "verified_at": "2026-09-25T09:56:42.158258+00:00"
   },
   "2024-11-24": {
     "clean_bytes": 389705682,
     "clean_rows": 9216962,
     "cleaned_at": "2026-09-23T15:25:12.557047+00:00",
     "downloaded_at": "2026-09-23T15:23:30.988875+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.22,
+      4.03,
+      15.98
+    ],
+    "fingerprint_max_timestamp": "2024-11-24T23:59:58",
+    "fingerprint_message_count": 9216962,
+    "fingerprint_min_timestamp": "2024-11-24T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2539,
     "raw_bytes": 491608305,
     "raw_discarded_at": "2026-09-23T15:25:12.610288+00:00",
-    "raw_rows": 16434986
+    "raw_rows": 16434986,
+    "verified_at": "2026-09-25T09:56:43.503039+00:00"
   },
   "2024-11-25": {
     "clean_bytes": 388960309,
     "clean_rows": 9203204,
     "cleaned_at": "2026-09-23T15:29:14.721394+00:00",
     "downloaded_at": "2026-09-23T15:27:32.925748+00:00",
+    "fingerprint_bbox": [
+      54.04,
+      58.26,
+      4.18,
+      16.33
+    ],
+    "fingerprint_max_timestamp": "2024-11-25T23:59:58",
+    "fingerprint_message_count": 9203204,
+    "fingerprint_min_timestamp": "2024-11-25T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2792,
     "raw_bytes": 486323627,
     "raw_discarded_at": "2026-09-23T15:29:14.766684+00:00",
-    "raw_rows": 16223559
+    "raw_rows": 16223559,
+    "verified_at": "2026-09-25T09:56:44.702015+00:00"
   },
   "2024-11-26": {
     "clean_bytes": 387194486,
     "clean_rows": 9161476,
     "cleaned_at": "2026-09-23T15:33:04.503593+00:00",
     "downloaded_at": "2026-09-23T15:31:23.629128+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.25,
+      4.24,
+      16.17
+    ],
+    "fingerprint_max_timestamp": "2024-11-26T23:59:58",
+    "fingerprint_message_count": 9161476,
+    "fingerprint_min_timestamp": "2024-11-26T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2570,
     "raw_bytes": 482505666,
     "raw_discarded_at": "2026-09-23T15:33:04.556914+00:00",
-    "raw_rows": 16117338
+    "raw_rows": 16117338,
+    "verified_at": "2026-09-25T09:56:45.996492+00:00"
   },
   "2024-11-27": {
     "clean_bytes": 399204212,
     "clean_rows": 9403651,
     "cleaned_at": "2026-09-23T15:37:05.302277+00:00",
     "downloaded_at": "2026-09-23T15:35:18.854467+00:00",
+    "fingerprint_bbox": [
+      53.88,
+      58.22,
+      3.89,
+      16.01
+    ],
+    "fingerprint_max_timestamp": "2024-11-27T23:59:58",
+    "fingerprint_message_count": 9403651,
+    "fingerprint_min_timestamp": "2024-11-27T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2855,
     "raw_bytes": 500931613,
     "raw_discarded_at": "2026-09-23T15:37:05.349001+00:00",
-    "raw_rows": 16693163
+    "raw_rows": 16693163,
+    "verified_at": "2026-09-25T09:56:47.302967+00:00"
   },
   "2024-11-28": {
     "clean_bytes": 394388113,
     "clean_rows": 9318348,
     "cleaned_at": "2026-09-23T15:41:00.876841+00:00",
     "downloaded_at": "2026-09-23T15:39:15.039432+00:00",
+    "fingerprint_bbox": [
+      54.15,
+      58.28,
+      4.16,
+      16.0
+    ],
+    "fingerprint_max_timestamp": "2024-11-28T23:59:58",
+    "fingerprint_message_count": 9318348,
+    "fingerprint_min_timestamp": "2024-11-28T00:00:00",
+    "fingerprint_n_distinct_mmsi": 2605,
     "raw_bytes": 494035563,
     "raw_discarded_at": "2026-09-23T15:41:00.924822+00:00",
-    "raw_rows": 16543813
+    "raw_rows": 16543813,
+    "verified_at": "2026-09-25T09:56:48.596474+00:00"
   },
   "2024-11-29": {
     "clean_bytes": 401868408,
     "clean_rows": 9446719,
     "cleaned_at": "2026-09-23T15:45:06.774815+00:00",
     "downloaded_at": "2026-09-23T15:43:15.958953+00:00",
+    "fingerprint_bbox": [
+      53.71,
+      58.35,
+      3.87,
+      16.43
+    ],
+    "fingerprint_max_timestamp": "2024-11-29T23:59:58",
+    "fingerprint_message_count": 9446719,
+    "fingerprint_min_timestamp": "2024-11-29T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3200,
     "raw_bytes": 514821324,
     "raw_discarded_at": "2026-09-23T15:45:06.822365+00:00",
-    "raw_rows": 17231698
+    "raw_rows": 17231698,
+    "verified_at": "2026-09-25T09:56:49.865768+00:00"
   },
   "2024-11-30": {
     "clean_bytes": 423000394,
     "clean_rows": 9907224,
     "cleaned_at": "2026-09-23T15:51:21.244927+00:00",
     "downloaded_at": "2026-09-23T15:49:18.931239+00:00",
+    "fingerprint_bbox": [
+      53.57,
+      58.22,
+      4.08,
+      17.25
+    ],
+    "fingerprint_max_timestamp": "2024-11-30T23:59:58",
+    "fingerprint_message_count": 9907224,
+    "fingerprint_min_timestamp": "2024-11-30T00:00:00",
+    "fingerprint_n_distinct_mmsi": 3515,
     "raw_bytes": 553766859,
     "raw_discarded_at": "2026-09-23T15:51:21.297418+00:00",
-    "raw_rows": 18391589
+    "raw_rows": 18391589,
+    "verified_at": "2026-09-25T09:56:51.217100+00:00"
   }
 }
