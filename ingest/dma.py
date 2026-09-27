@@ -28,10 +28,13 @@ Two quirks of this source drive the design below:
    second real window (2026-09-23) hit the same thing repeatedly across a
    60-day range (``httpx.ReadTimeout``, occasionally ``httpx.ConnectError``
    from a DNS lookup failure). ``_fetch_day`` retries a transient
-   ``httpx.TransportError`` in place, per URL, with exponential backoff
-   (:data:`MAX_FETCH_ATTEMPTS`, :data:`RETRY_BACKOFF_BASE_SECONDS`) before
-   moving on to the next filename pattern or giving up -- a real 404 is not
-   retried, only a network-level failure is.
+   ``httpx.TransportError`` in place, per URL, with capped exponential backoff
+   (:data:`MAX_FETCH_ATTEMPTS`, :data:`RETRY_BACKOFF_BASE_SECONDS`,
+   :data:`MAX_BACKOFF_SECONDS`) before moving on to the next filename pattern
+   or giving up -- a real 404 is not retried, only a network-level failure is.
+   A retry resumes the partial file with an HTTP ``Range`` request (the bucket
+   answers 206) instead of restarting ~500 MB from byte 0, and an attempt that
+   received bytes resets the failure count.
 """
 
 from __future__ import annotations
@@ -64,11 +67,13 @@ RAW_ROOT = Path("data/raw/ais_dk")
 
 ZIP_MAGIC = b"PK\x03\x04"
 
-# See module docstring point 3. 5 attempts, doubling from 2s, tops out at
-# ~30s of extra waiting per URL before moving on -- enough to smooth over the
-# transient blips observed in practice without masking a genuinely dead host.
-MAX_FETCH_ATTEMPTS = 5
+# See module docstring point 3. Attempts count only consecutive failures with no bytes
+# received; doubling from 2s, capped at 60s, 10 attempts wait ~6 min before giving up -- a
+# 2026-09-25 outage of a few minutes (DNS failing) exhausted the old ~30s budget and failed every
+# window of a multi-month build in cascade.
+MAX_FETCH_ATTEMPTS = 10
 RETRY_BACKOFF_BASE_SECONDS = 2.0
+MAX_BACKOFF_SECONDS = 60.0
 
 
 def _daterange(start: date, end: date) -> Iterator[date]:
@@ -101,13 +106,25 @@ def _fetch_day(day: date, client: httpx.Client, dest_dir: Path) -> Path:
         filename = Path(key).name
         url = f"{BASE_URL}/{key}"
         local_path = dest_dir / filename
-        for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+        local_path.unlink(missing_ok=True)
+        attempt = 1
+        while True:
+            offset = local_path.stat().st_size if local_path.exists() else 0
+            headers = {"Range": f"bytes={offset}-"} if offset else None
             try:
-                with client.stream("GET", url) as response:
+                with client.stream("GET", url, headers=headers) as response:
                     if response.status_code == 404:
                         break  # not found under this pattern -- try the next one, no retry
+                    if response.status_code == 416 and offset:
+                        # Range starts at/after the end: the previous attempt had in fact
+                        # received the whole body before the connection dropped.
+                        logger.info("Downloaded %s (completed on resume)", url)
+                        return local_path
                     response.raise_for_status()
-                    with open(local_path, "wb") as fh:
+                    # 206 honours the Range and appends; a 200 means the server ignored it,
+                    # so start over rather than appending a second full copy.
+                    mode = "ab" if response.status_code == 206 else "wb"
+                    with open(local_path, mode) as fh:
                         fh.writelines(response.iter_bytes())
                 logger.info("Downloaded %s", url)
                 return local_path
@@ -116,17 +133,28 @@ def _fetch_day(day: date, client: httpx.Client, dest_dir: Path) -> Path:
                 break  # a real HTTP error (e.g. 403/500) -- try the next pattern, not a retry
             except httpx.TransportError as exc:
                 last_error = exc
-                if attempt == MAX_FETCH_ATTEMPTS:
+                if local_path.exists() and local_path.stat().st_size > offset:
+                    attempt = 1  # bytes arrived before the drop: progress, not a dead host
+                elif attempt == MAX_FETCH_ATTEMPTS:
                     logger.warning(
-                        "Giving up on %s after %d attempts (%s)", url, MAX_FETCH_ATTEMPTS, exc
+                        "Giving up on %s after %d attempts without progress (%s)",
+                        url,
+                        MAX_FETCH_ATTEMPTS,
+                        exc,
                     )
                     break  # exhausted retries for this pattern -- try the next one, if any
-                backoff = RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                else:
+                    attempt += 1
+                backoff = min(
+                    RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS
+                )
                 logger.warning(
-                    "Transient error fetching %s (attempt %d/%d): %s -- retrying in %.0fs",
+                    "Transient error fetching %s (attempt %d/%d, %d bytes kept): %s -- "
+                    "retrying in %.0fs",
                     url,
                     attempt,
                     MAX_FETCH_ATTEMPTS,
+                    local_path.stat().st_size if local_path.exists() else 0,
                     exc,
                     backoff,
                 )

@@ -218,6 +218,58 @@ def test_fetch_day_retries_transient_error_then_succeeds(tmp_path, monkeypatch):
     assert len(zip_calls) == 3, "should retry the same (.zip) url, not fall through to .csv"
 
 
+class _DropsMidStream(httpx.SyncByteStream):
+    """Yields the first `cut` bytes, then fails like a connection dropped mid-transfer."""
+
+    def __init__(self, body: bytes, cut: int) -> None:
+        self.body, self.cut = body, cut
+
+    def __iter__(self):
+        yield self.body[: self.cut]
+        raise httpx.ReadTimeout("simulated mid-stream drop")
+
+
+def test_fetch_day_resumes_a_dropped_transfer_with_range(tmp_path, monkeypatch):
+    """After a mid-stream drop the retry must ask only for the missing bytes and append them,
+    producing the exact original file -- not restart from byte 0 or duplicate the prefix."""
+    monkeypatch.setattr(dma.time, "sleep", lambda seconds: None)
+    body = _zip_bytes(SAMPLE_CSV)
+    cut = len(body) // 3
+    ranges: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".csv"):
+            return httpx.Response(404)
+        ranges.append(request.headers.get("Range"))
+        if len(ranges) == 1:
+            return httpx.Response(200, stream=_DropsMidStream(body, cut))
+        start = int(request.headers["Range"].removeprefix("bytes=").removesuffix("-"))
+        return httpx.Response(206, content=body[start:])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    path = dma._fetch_day(DAY, client, tmp_path)
+
+    assert ranges == [None, f"bytes={cut}-"]
+    assert path.read_bytes() == body
+
+
+def test_fetch_day_restarts_when_server_ignores_range(tmp_path, monkeypatch):
+    monkeypatch.setattr(dma.time, "sleep", lambda seconds: None)
+    body = _zip_bytes(SAMPLE_CSV)
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".csv"):
+            return httpx.Response(404)
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=_DropsMidStream(body, 10))
+        return httpx.Response(200, content=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert dma._fetch_day(DAY, client, tmp_path).read_bytes() == body
+
+
 def test_fetch_day_gives_up_after_max_attempts(tmp_path, monkeypatch):
     """Retries must not be infinite -- a genuinely dead host still surfaces as FileNotFoundError,
     chaining the last transient error, once both patterns are exhausted."""
