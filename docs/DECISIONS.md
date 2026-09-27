@@ -1708,3 +1708,20 @@ _2026-09-27_ (P4-3f result: the OpenSanctions coverage gate is NO-GO, decisively
 - **What could revive it (not pursued):** OpenSanctions' historical archives (these need a
   paid data-delivery token), or a dated registry such as GFW's `registryOwners` (often empty for
   non-fishing vessels, per the research notes). Equasis is ruled out by its terms of use.
+
+_2026-09-27_ (session close: decisions taken from the deep-research report)
+
+- **LLMs never score vessels.** A 2025-26 model may remember post-cutoff designations (hindsight
+  leakage; the report cites an audit of 2026 models), so LLMs are allowed only for
+  preprocessing, e.g. normalizing destination strings, never as a risk scorer or feature oracle.
+- **No SMOTE, synthetic positives or self-training.** They miscalibrate without improving
+  ranking in the cited evidence, and they hurt TabPFN in its only controlled imbalance study.
+- **Already-sanctioned vessels are not borrowed as positives** (measured to hurt in P4-3c).
+  Their signal enters instead through P4-3g's hazard design, which uses only their
+  pre-designation months.
+- **Tree models stay on CPU.** GPU LightGBM/XGBoost gains nothing at ~5k-60k rows, and RAPIDS
+  and DGL lack Windows/Blackwell support. The GPU is reserved for the TabPFN/TabICL challenger
+  and the trajectory-encoder experiment.
+- **Research report and notes stay out of git** (author's call). They are in Spanish, while
+  repo documentation is English; they are listed in `.git/info/exclude`, and STATE.md points to
+  them.

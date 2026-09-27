@@ -332,64 +332,53 @@ _Last updated: 2026-09-27_
 
 ## In progress
 
-**P4-3b: building every month the DMA archive serves (option A, author's call 2026-09-25).**
-`scripts/build_archive_windows.sh`: windows 2024-04..2025-02 one at a time (March 2024 is only
-April's lead-in; June/November already exist and are only verified), `detect.gaps` per window,
-then `process.sanctions_match --force` and one panel per window at
-`data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
-(START/OK/FAIL per step, `DONE` at the end); per-step logs next to it.
-**History.** First launch 2026-09-25 13:47 failed in cascade: the connection was slow (~120 KB/s)
-and then dropped for a few minutes (DNS `getaddrinfo failed`), exhausting `ingest.dma`'s ~30 s
-retry budget, so every window failed within an hour and only 2024-04-01 got downloaded (the
-script printed `DONE` at 14:40 with FAIL on everything except June/November). The machine was
-later switched off, which lost nothing further. Fixed in commit 4118a61: `ingest.dma._fetch_day`
-now resumes a dropped transfer with HTTP Range and waits out outages (10 attempts without
-progress, backoff capped at 60 s, ~6 min). **Relaunched 2026-09-27 16:46** (detached, PID 26284);
-connection now ~9 MB/s, ~75 s per raw day. Rough estimate: ~9 h of downloads plus ~2.5 h of
-detectors per window (`sts` alone ~76 min), i.e. **~1.5 days if the machine stays on**.
-**Status 2026-09-27 17:51: STOPPED -- the machine was switched off again (~1 h after the relaunch).** On disk: 2024-03-02..2024-03-20 (19 days, last two verified readable with DuckDB) and 2024-04-01; ~3 min per day measured (download + clean). A half-finished download of 2024-03-21 sits in `data/tmp/dma-2024-03-21-*` (harmless, re-fetched from scratch; the author has not yet decided whether to delete it). ~250 days remain. **Relaunched 2026-09-27 17:53 (PID 8820).** The April window failed at once: the shutdown had left a truncated raw partition `data/raw/ais_dk/date=2024-03-21/part-0.parquet` (no parquet footer), deleted with the author's OK; the script carried on with May (downloading April days). **April still needs one more run: after `DONE`, re-run the script.** Lesson: a shutdown mid-write can leave a truncated raw/clean partition -- validate the last day with DuckDB before relaunching. **If the machine is switched off or sleeps, the build stops; just re-run the script** -- every
-step is idempotent and skips what is already built. If some windows end in FAIL, re-run it once
-more after `DONE`. **Never start a second build over `data/` while it runs**; other agents working
-in parallel must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans).
-Disk: ~272 new days x ~0.47 GB ~ 128 GB of clean data against ~239 GB free, so no pruning needed.
-Why: P4-3 had 16 training positives and one cutoff; 109 of the vessels already matched in our
-AIS were designated inside the archive period, and designations peak in 2024-Q4 (130) and
-2025-Q1 (225), so a walk-forward evaluation (train on every earlier month with as-of-cutoff
-labels, test on the next) should give ~80-100 training positives and 6-8 cutoffs.
+**P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
+`scripts/build_archive_windows.sh` runs detached (PID 8820, relaunched 2026-09-27 17:53). It
+builds one window at a time, then `detect.gaps` per window, then `process.sanctions_match --force`,
+then one panel per window at `data/processed/panel/window=<start>_<end>/`. Progress:
+`outputs/logs/build_archive_windows.status` (START/OK/FAIL per step, `DONE` at the end); per-step
+logs sit next to it.
+- **Status 2026-09-27 22:10.** Downloading May: 21 of 31 days clean. April's 30 days are
+  downloaded but its window FAILED at start (a truncated raw partition left by a shutdown, since
+  deleted). **After `DONE`, re-run the script once to build April** (and any other FAIL).
+- ~190 days remain at ~3 min/day, plus ~2.5 h of detectors per window (`sts` ~76 min). That is
+  **~1.5 days if the machine stays on**.
+- **If the machine sleeps or shuts down, the build stops.** Validate the last written day with
+  DuckDB (a shutdown mid-write can leave a truncated partition), then just re-run the script:
+  every step is idempotent.
+- **Never start a second build over `data/` while it runs.** Parallel work may read `data/`
+  through DuckDB (keep it to ~4 threads) but must not write there.
+- A stale partial download `data/tmp/dma-2024-04-02-*` is harmless; delete it after `DONE`.
+- Disk: ~128 GB of new clean data against ~239 GB free; no pruning needed. **Do not prune clean
+  data**: `features.static` and P4-3h need message-level draught, destination and positions.
 
 ## Next up
 
-**When P4-3b finishes: run `python -m features.static` for every window, then extend
-`model.lightgbm_risk` to a walk-forward evaluation** over every monthly cutoff, with the budgets
-and the no-exposure variant pre-registered in `docs/DECISIONS.md`'s P4-3 entry and the frozen
-`static` variant from its 2026-09-27 P4-3c entry, and report the result per cutoff plus pooled
-**through `model.pooled_evaluation` (the frozen P4-3e protocol)**. Then P4-3g (hazard model:
-every vessel designated inside the archive contributes its pre-designation months, ~100
-positives instead of 16) and P4-3h (implied Russian loading from draught). Both need the build.
-**Do not prune clean data**: P4-3h and `features.static` need message-level draught, destination
-and positions. GPU work (TabPFN v2/TabICL challenger, trajectory encoder without coordinates)
-needs PyTorch >= 2.7 with cu128 wheels for the RTX 5060 Ti (sm_120). `sts` is the
-slowest stage (~76 min per window); if the build is too slow, that is the thing to profile, but
-only after the running build finishes. Then **P4-4 (calibration)**.
+1. **When P4-3b ends:** re-run the script for April, then `python -m features.static --start
+   <s> --end <e>` for every window (it writes `data/processed/static/window=.../`).
+2. **Walk-forward (rest of P4-3b):** extend `model.lightgbm_risk` to every monthly cutoff,
+   scored through `model.pooled_evaluation` (the frozen P4-3e protocol). Variants: R2, P4-3's
+   pre-registered ones, and the frozen P4-3c `static` variant (logistic regression, plus LightGBM
+   as secondary). Report results per cutoff and pooled; run `analyst-review` afterwards.
+3. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
+   its pre-designation months, giving ~100 positives instead of 16. This also explains why adding
+   post-designation rows hurt. Pre-register it before running.
+4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
+   Thresholds are fixed on March 2024 only; validate against GFW port visits.
+5. Then P4-4 (calibration). Challengers from the research report:
+   - TabPFN v2 / TabICL (licence-clean);
+   - bagging PU (averaging models trained on resampled vessels whose label is unknown);
+   - a trajectory encoder without coordinates, as a probable null.
+   All need PyTorch >= 2.7 with cu128 wheels for the RTX 5060 Ti (sm_120).
+6. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
+   Flag/name changes mostly happen AFTER designation (CREA), so they leak unless restricted to
+   well before the cutoff. Owner/manager networks are out (P4-3f NO-GO).
 
-**Improvement option B -- better signals, not just more data (author: keep as an option).
-Destination + size + IMO-age are now done (P4-3c); the rest is task P4-3d. WARNING from the
-literature (CREA): flag changes and false flags mostly happen AFTER designation, so "flag changes
-over time" below would leak the label unless restricted to changes well before the cutoff.
-Newer candidates: pilotage refusal in the Danish straits (no rendezvous with a pilot boat) and
-long Skagen anchoring.**
-Today's detectors look for *unusual behaviour*, and sanctioned vessels in Danish waters don't
-behave unusually: they transit. What plausibly identifies them instead:
-- **Russian-port link** from our own AIS: declared destinations such as Primorsk / Ust-Luga /
-  St Petersburg (and LOCODEs `RUPRI`, `RULUG`, `RULED` -- see the LOCODE gap in the open questions
-  below), and draught pattern on Baltic transits (eastbound in ballast, westbound laden).
-- **Flag and name changes over time** for the same IMO, visible across the monthly windows once
-  P4-3b lands (flag via MMSI MID change, see `process.mid`).
-- **Global behaviour from GFW** for the vessels in our panel (the Events API is already wired up
-  in `ingest/gfw.py`): port visits to Russian oil terminals, AIS-gap and encounter events
-  anywhere in the world, not only in Danish coverage.
-Each must respect the as-of-cutoff rule (only information public before the cutoff), and the
-Russian-port features need a check that they aren't just a relabelling of the sanctions criteria.
+**Research report.** The deep search (2026-09-27) lives in
+`reports/Modelos para predecir la flota fantasma.md` and `research_notes/`. Both are in Spanish
+and kept out of git at the author's request (listed in `.git/info/exclude`). Headline: nobody has
+published a forward-in-time sanctions predictor, and at this label count, gains come from data
+design, not model architecture.
 
 ## Blocked
 
