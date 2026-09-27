@@ -5,4 +5,5 @@ export default defineConfig({
   integrations: [svelte()],
   trailingSlash: 'ignore',
   build: { format: 'directory' },
+  devToolbar: { enabled: false },
 });

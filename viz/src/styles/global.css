@@ -38,6 +38,11 @@
   --c-event-soft: rgba(25, 158, 112, 0.14);
   --c-vessel-soft: rgba(57, 135, 229, 0.14);
 
+  /* Status palette (never used for data series; always paired with a text label) */
+  --s-good: #0ca30c;
+  --s-warning: #fab219;
+  --s-critical: #d03b3b;
+
   --font-ui: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-serif: 'Newsreader Variable', Georgia, 'Times New Roman', serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', monospace;
