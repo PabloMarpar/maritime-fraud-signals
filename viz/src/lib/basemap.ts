@@ -17,12 +17,14 @@ export const PALETTE = {
 /** The first symbol layer id: raster/data layers are inserted before it so labels stay on top. */
 export const LABELS_BEFORE = 'waterway_label';
 
-let stylePromise: Promise<StyleSpecification> | null = null;
+const stylePromises = new Map<string, Promise<StyleSpecification>>();
 
-/** CARTO Dark Matter, recoloured to a navy night palette and stripped of POIs. */
-export function nauticalStyle(): Promise<StyleSpecification> {
-  if (!stylePromise) {
-    stylePromise = fetch(STYLE_URL)
+/** CARTO Dark Matter, recoloured to a navy night palette, stripped of POIs, and labelled in the
+ * page language (the tiles carry name:es / name:en; street names keep their local form). */
+export function nauticalStyle(lang: 'en' | 'es' = 'en'): Promise<StyleSpecification> {
+  if (!stylePromises.has(lang)) {
+    const localized = ['coalesce', ['get', `name:${lang}`], ['get', 'name_en'], ['get', 'name']];
+    stylePromises.set(lang, fetch(STYLE_URL)
       .then((r) => r.json())
       .then((style: StyleSpecification) => {
         style.layers = style.layers
@@ -52,17 +54,21 @@ export function nauticalStyle(): Promise<StyleSpecification> {
                   : PALETTE.label;
               l.paint['text-halo-color'] = PALETTE.halo;
               l.paint['text-halo-width'] = 1.2;
+              if (!id.startsWith('roadname') && id !== 'housenumber' && l.layout?.['text-field']) {
+                l.layout['text-field'] = localized;
+              }
             }
             return l;
           });
         return style;
-      });
+      }));
   }
-  return stylePromise;
+  return stylePromises.get(lang)!;
 }
 
 export interface BaseMapOptions {
   container: HTMLElement;
+  lang?: 'en' | 'es';
   center?: [number, number];
   zoom?: number;
   bounds?: [number, number, number, number];
@@ -74,7 +80,7 @@ export interface BaseMapOptions {
 }
 
 export async function createBaseMap(opts: BaseMapOptions): Promise<MLMap> {
-  const style = await nauticalStyle();
+  const style = await nauticalStyle(opts.lang);
   const map = new maplibregl.Map({
     container: opts.container,
     style,

@@ -305,7 +305,7 @@
       .catch(() => {});
     (async () => {
       const [w, s, e, n] = REGIONS[region].bounds;
-      map = await createBaseMap({ container, bounds: [w, s, e, n], navigation: true, maxZoom: 15 });
+      map = await createBaseMap({ container, lang, bounds: [w, s, e, n], navigation: true, maxZoom: 15 });
       if (destroyed) return;
       overlay = new MapboxOverlay({
         interleaved: true,

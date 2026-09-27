@@ -1,0 +1,293 @@
+---
+import { readFileSync } from 'node:fs';
+import Base from '../../layouts/Base.astro';
+import { LANGS, localePath, t, type Lang } from '../../i18n/ui';
+import { glyphSvg } from '../../lib/icons';
+
+export function getStaticPaths() {
+  return LANGS.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Lang;
+
+// The months built so far, read from the export at build time.
+let months: string[] = [];
+let snapshot: string | null = null;
+try {
+  const meta = JSON.parse(readFileSync('public/data/windows.json', 'utf-8'));
+  const fmt = new Intl.DateTimeFormat(lang === 'es' ? 'es-ES' : 'en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  months = meta.windows.map((w: { start: string }) => fmt.format(new Date(`${w.start}T00:00:00Z`)));
+  snapshot = meta.sanctions_snapshot?.slice(0, 10) ?? null;
+} catch {
+  months = [];
+}
+
+const C = {
+  en: {
+    title: 'About this project',
+    lede: 'Maritime Fraud Signals reads the public radio signals every large ship must broadcast and asks a narrow question: do the vessels that end up on sanctions lists behave differently in the Danish straits before they are listed?',
+    dataTitle: 'The data',
+    data: [
+      '<strong>AIS</strong> (Automatic Identification System) is a transponder that broadcasts a ship’s identity, position, speed and course every few seconds, plus a few hand-typed fields such as destination and draught. The Danish Maritime Authority publishes everything its coastal receivers hear, one file per day.',
+      '<strong>Sanctions lists</strong> from the US Treasury (OFAC), the UK (OFSI) and the EU name vessels by their IMO number, a seven-digit identifier that stays with a hull for life. A vessel counts as sanctioned here only when its IMO matches a listed one.',
+    ],
+    monthsLabel: 'Months built so far',
+    snapshotLabel: 'Sanctions snapshot',
+    detectorsTitle: 'The five detectors',
+    detectorsIntro: 'Rule-based, not learned: each one encodes physics or maritime practice, so its reasoning can be inspected and it needs no training data.',
+    detectors: [
+      ['dash', 'AIS gaps', 'A silence between two voyages, judged by whether other vessels nearby were still being heard at the time.'],
+      ['diamond', 'Position anomalies', 'Impossible speeds, perfect synthetic circles and two positions at once.'],
+      ['ring', 'Ship-to-ship encounters', 'Two vessels slow and side by side away from any anchorage, the shape of a cargo transfer at sea.'],
+      ['dot', 'Identity changes', 'Names and call signs that change or flip back and forth, identity numbers shared between vessels.'],
+      ['triangle', 'Declared-behaviour contradictions', 'Heading away from the declared destination, or a large draught change with no port call in sight.'],
+    ],
+    foundTitle: 'What the data shows so far',
+    found: [
+      'Mostly, the vessels sanctioned later do <em>not</em> behave evasively in Danish waters: they go silent less often than other tankers and almost never fake positions. Only unexplained draught changes point the expected way, consistent with cargo being loaded beyond these receivers’ range.',
+      'What does separate them is structural: what they are (old tankers, flags of convenience) and where they say they are going. The modelling work that tests this properly, month by month and forward in time, is still running. <strong>This site publishes no risk scores or predictions</strong> until a model beats a simple baseline rule: “a tanker under a flag of convenience”.',
+    ],
+    limitsTitle: 'Limitations',
+    limits: [
+      '<strong>Coverage.</strong> Only what Danish coastal receivers hear. A ship out of their range is silent here whether or not its transponder is on.',
+      '<strong>Label bias.</strong> Sanctions lists name the vessels that were caught, chosen by governments for their own reasons. An unlisted vessel is not necessarily clean, and a listed one may have been designated for things AIS cannot show, such as ownership or insurance.',
+      '<strong>Self-reported fields.</strong> Destination, draught and even the vessel type are typed by crews and are often blank, stale or wrong.',
+      '<strong>Judgement calls.</strong> Every detector threshold is a reasoned default, not a value tuned on labelled cases.',
+      '<strong>Signals, not accusations.</strong> Nothing on this site says that any vessel broke any law.',
+    ],
+    sourcesTitle: 'Sources and licences',
+    sources: [
+      'AIS positions: Danish Maritime Authority.',
+      'Sanctions: US OFAC (public domain), UK OFSI (Open Government Licence v3.0), EU list via OpenSanctions (CC BY-NC 4.0).',
+      'Basemap: © OpenStreetMap contributors (ODbL), © CARTO.',
+      'Code: MIT licence.',
+    ],
+    code: 'Code and full methodology on GitHub',
+  },
+  es: {
+    title: 'Sobre este proyecto',
+    lede: 'Maritime Fraud Signals lee las señales de radio públicas que todo buque grande debe emitir y se hace una pregunta concreta: ¿los buques que acaban en listas de sanciones se comportan distinto en los estrechos daneses antes de ser sancionados?',
+    dataTitle: 'Los datos',
+    data: [
+      'El <strong>AIS</strong> (Sistema de Identificación Automática) es un transpondedor que emite cada pocos segundos la identidad, posición, velocidad y rumbo del buque, más algunos campos que teclea la tripulación, como el destino y el calado. La Autoridad Marítima de Dinamarca publica todo lo que oyen sus receptores costeros, un archivo por día.',
+      'Las <strong>listas de sanciones</strong> del Tesoro de EE. UU. (OFAC), del Reino Unido (OFSI) y de la UE identifican a los buques por su número IMO, un identificador de siete cifras que acompaña al casco toda su vida. Aquí un buque cuenta como sancionado solo si su IMO coincide con uno listado.',
+    ],
+    monthsLabel: 'Meses construidos hasta ahora',
+    snapshotLabel: 'Instantánea de sanciones',
+    detectorsTitle: 'Los cinco detectores',
+    detectorsIntro: 'Basados en reglas, no aprendidos: cada uno codifica física o práctica marítima, así que su razonamiento se puede inspeccionar y no necesita datos de entrenamiento.',
+    detectors: [
+      ['dash', 'Apagones AIS', 'Un silencio entre dos travesías, juzgado según si se seguía oyendo a otros buques cercanos en ese momento.'],
+      ['diamond', 'Anomalías de posición', 'Velocidades imposibles, círculos sintéticos perfectos y dos posiciones a la vez.'],
+      ['ring', 'Encuentros entre buques', 'Dos buques lentos y juntos lejos de cualquier fondeadero: la forma de un trasvase de carga en alta mar.'],
+      ['dot', 'Cambios de identidad', 'Nombres y distintivos que cambian o alternan, números de identidad compartidos entre buques.'],
+      ['triangle', 'Contradicciones de lo declarado', 'Navegar alejándose del destino declarado, o un gran cambio de calado sin ninguna escala a la vista.'],
+    ],
+    foundTitle: 'Lo que muestran los datos hasta ahora',
+    found: [
+      'En general, los buques sancionados después <em>no</em> se comportan de forma evasiva en aguas danesas: se quedan en silencio menos que otros petroleros y casi nunca falsean su posición. Solo los cambios de calado sin explicación apuntan en la dirección esperada, coherente con cargas hechas fuera del alcance de estos receptores.',
+      'Lo que sí los distingue es estructural: qué son (petroleros viejos, banderas de conveniencia) y adónde dicen que van. El trabajo de modelado que lo comprueba en serio, mes a mes y hacia delante en el tiempo, sigue en marcha. <strong>Esta web no publica puntuaciones de riesgo ni predicciones</strong> hasta que un modelo supere una regla sencilla de referencia: «petrolero con bandera de conveniencia».',
+    ],
+    limitsTitle: 'Limitaciones',
+    limits: [
+      '<strong>Cobertura.</strong> Solo lo que oyen los receptores costeros daneses. Un buque fuera de su alcance calla aquí tenga o no el transpondedor encendido.',
+      '<strong>Sesgo de las etiquetas.</strong> Las listas de sanciones nombran a los buques que fueron descubiertos, elegidos por los gobiernos con sus propios criterios. Un buque no listado no está necesariamente limpio, y uno listado puede haberlo sido por cosas que el AIS no muestra, como la propiedad o el seguro.',
+      '<strong>Campos declarados.</strong> El destino, el calado e incluso el tipo de buque los teclea la tripulación, y a menudo están vacíos, desactualizados o mal.',
+      '<strong>Decisiones de criterio.</strong> Cada umbral de los detectores es un valor razonado por defecto, no ajustado con casos etiquetados.',
+      '<strong>Señales, no acusaciones.</strong> Nada en esta web afirma que un buque haya infringido ninguna ley.',
+    ],
+    sourcesTitle: 'Fuentes y licencias',
+    sources: [
+      'Posiciones AIS: Autoridad Marítima de Dinamarca.',
+      'Sanciones: OFAC de EE. UU. (dominio público), OFSI del Reino Unido (Open Government Licence v3.0), lista de la UE vía OpenSanctions (CC BY-NC 4.0).',
+      'Mapa base: © colaboradores de OpenStreetMap (ODbL), © CARTO.',
+      'Código: licencia MIT.',
+    ],
+    code: 'Código y metodología completa en GitHub',
+  },
+}[lang];
+---
+
+<Base lang={lang} path="about/" title={C.title}>
+  <article class="about">
+    <header>
+      <div class="eyebrow">{t(lang, 'nav.about')}</div>
+      <h1>{C.title}</h1>
+      <p class="lede">{C.lede}</p>
+    </header>
+
+    <section>
+      <h2>{C.dataTitle}</h2>
+      {C.data.map((p) => <p set:html={p} />)}
+      <dl class="facts">
+        <div>
+          <dt>{C.monthsLabel}</dt>
+          <dd>{months.length ? months.join(' · ') : '—'}</dd>
+        </div>
+        {snapshot && (
+          <div>
+            <dt>{C.snapshotLabel}</dt>
+            <dd class="mono">{snapshot}</dd>
+          </div>
+        )}
+      </dl>
+    </section>
+
+    <section>
+      <h2>{C.detectorsTitle}</h2>
+      <p>{C.detectorsIntro}</p>
+      <ul class="detectors">
+        {
+          C.detectors.map(([glyph, name, desc]) => (
+            <li>
+              <span class="glyph" set:html={glyphSvg(glyph as any, 16)} />
+              <div>
+                <strong>{name}</strong>
+                <p>{desc}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ul>
+    </section>
+
+    <section>
+      <h2>{C.foundTitle}</h2>
+      {C.found.map((p) => <p set:html={p} />)}
+      <p><a class="btn" href={localePath(lang, '')}>{t(lang, 'story.title')} →</a></p>
+    </section>
+
+    <section>
+      <h2>{C.limitsTitle}</h2>
+      <ul class="limits">{C.limits.map((p) => <li set:html={p} />)}</ul>
+    </section>
+
+    <section>
+      <h2>{C.sourcesTitle}</h2>
+      <ul class="plain">{C.sources.map((p) => <li>{p}</li>)}</ul>
+      <p><a class="link" href="https://github.com/PabloMarpar/maritime-fraud-signals">{C.code} ↗</a></p>
+    </section>
+  </article>
+</Base>
+
+<style>
+  .about {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px var(--gutter) 40px;
+  }
+
+  h1 {
+    margin: 8px 0 18px;
+    font-family: var(--font-serif);
+    font-size: clamp(38px, 6vw, 64px);
+    font-weight: 480;
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+  }
+
+  .lede {
+    margin: 0;
+    font-family: var(--font-serif);
+    font-size: clamp(19px, 2.2vw, 23px);
+    line-height: 1.45;
+    color: var(--text-2);
+  }
+
+  section {
+    margin-top: 48px;
+  }
+
+  h2 {
+    margin: 0 0 14px;
+    font-family: var(--font-serif);
+    font-size: 28px;
+    font-weight: 500;
+  }
+
+  p,
+  li {
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--text-2);
+  }
+
+  p :global(strong),
+  li :global(strong) {
+    color: var(--text-1);
+  }
+
+  .facts {
+    display: grid;
+    gap: 12px;
+    margin: 20px 0 0;
+    padding: 16px 18px;
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+  }
+
+  dt {
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+
+  dd {
+    margin: 2px 0 0;
+    font-size: 14.5px;
+  }
+
+  .detectors {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+
+  .detectors li {
+    display: flex;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: var(--radius-m);
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+  }
+
+  .detectors p {
+    margin: 2px 0 0;
+    font-size: 14.5px;
+  }
+
+  .glyph {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 8px;
+    color: var(--c-event);
+    background: var(--c-event-soft);
+  }
+
+  .limits {
+    padding-left: 20px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .plain {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .plain li {
+    font-size: 14.5px;
+  }
+
+  .link {
+    color: var(--text-1);
+  }
+</style>

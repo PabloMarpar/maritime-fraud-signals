@@ -93,6 +93,22 @@
     return colors;
   });
 
+  // Built once per window: deck.gl compares `data` by reference, and a new object every frame
+  // would re-tessellate every track on every frame.
+  const binaryData = $derived(
+    tracks && vertexColors
+      ? {
+          length: tracks.startIndices.length,
+          startIndices: tracks.startIndices,
+          attributes: {
+            getPath: { value: tracks.positions, size: 2 },
+            getTimestamps: { value: tracks.times, size: 1 },
+            getColor: { value: vertexColors, size: 4, normalized: true },
+          },
+        }
+      : null,
+  );
+
   const selectedPaths = $derived.by(() => {
     if (selected === null || !fleet || !tracks) return [];
     const vi = vesselIndex.get(selected);
@@ -211,19 +227,11 @@
   }
 
   function buildLayers() {
-    if (!fleet || !tracks || !events || !vertexColors) return [];
+    if (!fleet || !tracks || !events || !binaryData) return [];
     const cur = current;
     const atlas = iconAtlas();
     const out: any[] = [];
-    const binary = {
-      length: tracks.startIndices.length,
-      startIndices: tracks.startIndices,
-      attributes: {
-        getPath: { value: tracks.positions, size: 2 },
-        getTimestamps: { value: tracks.times, size: 1 },
-        getColor: { value: vertexColors, size: 4, normalized: true },
-      },
-    };
+    const binary = binaryData;
     const eventFilter = (size: 1 | 2) => new DataFilterExtension({ filterSize: size });
 
     if (layers.paths) {
@@ -555,7 +563,7 @@
       try {
         meta = await loadMeta();
         const [w, s, e, n] = meta.bbox;
-        map = await createBaseMap({ container, bounds: [w + 2.5, s + 0.3, e - 2.2, n - 0.5], navigation: true });
+        map = await createBaseMap({ container, lang, bounds: [w + 2.5, s + 0.3, e - 2.2, n - 0.5], navigation: true });
         if (destroyed) return;
         zoom = map.getZoom();
         map.on('zoomend', () => (zoom = map!.getZoom()));

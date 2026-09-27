@@ -24,6 +24,7 @@
   import { iconAtlas } from '../lib/icons';
 
   interface Props {
+    lang: 'en' | 'es';
     paths: [number, number][][];
     events: MapEvent[];
     lastPos: [number, number] | null;
@@ -32,7 +33,7 @@
     onpick?: (id: string) => void;
   }
 
-  let { paths, events, lastPos, listed, focus = null, onpick }: Props = $props();
+  let { lang, paths, events, lastPos, listed, focus = null, onpick }: Props = $props();
 
   let container: HTMLDivElement;
   let map = $state.raw<MLMap | null>(null);
@@ -165,6 +166,7 @@
       const b = bounds();
       map = await createBaseMap({
         container,
+        lang,
         bounds: b ? [b[0][0], b[0][1], b[1][0], b[1][1]] : undefined,
         navigation: true,
       });

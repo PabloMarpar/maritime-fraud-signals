@@ -261,7 +261,7 @@
     {#if w}
       <div class="grid">
         <div class="map-col">
-          <TrackMap {paths} events={mapEvents} lastPos={w.last_pos ? [w.last_pos[0], w.last_pos[1]] : null} {listed} {focus} onpick={pickEvent} />
+          <TrackMap {lang} {paths} events={mapEvents} lastPos={w.last_pos ? [w.last_pos[0], w.last_pos[1]] : null} {listed} {focus} onpick={pickEvent} />
         </div>
         <aside class="facts-col">
           <dl class="facts">
