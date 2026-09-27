@@ -1681,3 +1681,6 @@ _2026-09-27_ (P4 gate: OpenSanctions owner/manager coverage, criteria fixed befo
   interval includes 0.5. **GO iff G1 and G2 both pass, in both panels.** If per-link `first_seen`
   is not available in the free bulk data, the verdict is NO-GO by construction (links cannot be
   gated in time). Also reported: the share of links whose only sources are sanctions lists.
+- **Naming note.** "P0"/"P4" in the two entries above are the research report's plan steps, not
+  project phases: P0 = task P4-3e (implemented in `model/pooled_evaluation.py`, which reproduces
+  the June->November P4-3c numbers exactly), and the P4 gate = task P4-3f.
