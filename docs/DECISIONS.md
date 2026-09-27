@@ -1684,3 +1684,27 @@ _2026-09-27_ (P4 gate: OpenSanctions owner/manager coverage, criteria fixed befo
 - **Naming note.** "P0"/"P4" in the two entries above are the research report's plan steps, not
   project phases: P0 = task P4-3e (implemented in `model/pooled_evaluation.py`, which reproduces
   the June->November P4-3c numbers exactly), and the P4 gate = task P4-3f.
+
+_2026-09-27_ (P4-3f result: the OpenSanctions coverage gate is NO-GO, decisively)
+
+- **Source measured.** OpenSanctions `entities.ftm.json`, version 20260927185432-jyu, 2.6 GB,
+  downloaded to the session scratchpad (never under `data/`). Vessel IMO values are stored as
+  `IMO1234567` and were normalized to the panel's 7 digits. Vessel-organisation links are the
+  `Ownership` (asset) and `UnknownLink` (subject/object) schemas. FtM does not distinguish owner,
+  manager, operator or ISM company.
+- **Result, verified independently of the data-scout run with a DuckDB upper bound that ignores
+  the source filter.** No tanker in either panel has any link with `first_seen` before its cutoff:
+  0/893 in June (cutoff 2024-07-01) and 0/898 in November (cutoff 2024-12-01), from ANY source.
+  The earliest vessel-link `first_seen` in the whole file is 2023-04-20, the 10th percentile is
+  2025-07-03, and the median is 2025-07-13. Even ignoring time, only 218/893 and 211/898
+  tankers have any link at all (~24%). **G1 fails twice over, so G2 is moot. Verdict: NO-GO.**
+  (The data-scout's own report said "60 tankers" in one place and 0 in its table; the
+  independent recount confirms 0.)
+- **Consequence.** No owner/manager network features for any cutoff in the archive period
+  (<= 2025-02). OpenSanctions' coverage of vessel links is recent: most links were ingested
+  from 2025 onwards, largely after the designations we are trying to predict, which is also the
+  circularity the literature warned about. Research-report steps P6 (network features) and the
+  "new to the network" subset are therefore dropped for this archive, not deferred.
+- **What could revive it (not pursued):** OpenSanctions' historical archives (these need a
+  paid data-delivery token), or a dated registry such as GFW's `registryOwners` (often empty for
+  non-fishing vessels, per the research notes). Equasis is ruled out by its terms of use.

@@ -311,6 +311,25 @@ _Last updated: 2026-09-27_
   `python -m features.static --start ... --end ...` per window after the build. Only verified into
   a scratch dir; **nothing under `data/processed/static/` exists yet.** 49 new tests, `ruff` clean.
 
+- **P4-3e done: the pooled walk-forward evaluation protocol, frozen and implemented, 2026-09-27.**
+  Pre-registered in `docs/DECISIONS.md` before any new window is scored:
+  - 7 primary cutoffs (2024-08..2025-02); primary budget matched to R2's count, plus k=50/100/200.
+  - Expected precision under random tie-breaking; micro-averaged pooling, reported next to its
+    ceiling.
+  - Paired bootstrap clustered by IMO; secondary clustering by designation package.
+  - Label snapshot frozen at `sanctions.parquet` 2026-09-21.
+
+  Implemented in `model/pooled_evaluation.py` (15 tests); it reproduces the June->November P4-3c
+  numbers exactly.
+- **P4-3f done: the OpenSanctions owner/manager coverage gate is NO-GO, 2026-09-27.** 0/893
+  (June) and 0/898 (November) tankers have any vessel-organisation link dated before the cutoff,
+  from any source: OpenSanctions ingested these links from 2025 onwards (median `first_seen`
+  2025-07-13). Network features are dropped for the archive period.
+- A deep literature/model search (5 researchers) produced
+  `reports/Modelos para predecir la flota fantasma.md` (Spanish; not committed, pending the
+  author's call). Its top-ranked next steps are now tasks P4-3g (discrete-time hazard model)
+  and P4-3h (implied Russian loading from draught).
+
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (option A, author's call 2026-09-25).**
@@ -343,9 +362,13 @@ labels, test on the next) should give ~80-100 training positives and 6-8 cutoffs
 **When P4-3b finishes: run `python -m features.static` for every window, then extend
 `model.lightgbm_risk` to a walk-forward evaluation** over every monthly cutoff, with the budgets
 and the no-exposure variant pre-registered in `docs/DECISIONS.md`'s P4-3 entry and the frozen
-`static` variant from its 2026-09-27 P4-3c entry, and report the result per cutoff plus pooled.
-A deep literature/model search (trajectory DL, graphs, small-label learning, GPU stack for the
-RTX 5060 Ti) was launched 2026-09-27; its report lands in `reports/`. `sts` is the
+`static` variant from its 2026-09-27 P4-3c entry, and report the result per cutoff plus pooled
+**through `model.pooled_evaluation` (the frozen P4-3e protocol)**. Then P4-3g (hazard model:
+every vessel designated inside the archive contributes its pre-designation months, ~100
+positives instead of 16) and P4-3h (implied Russian loading from draught). Both need the build.
+**Do not prune clean data**: P4-3h and `features.static` need message-level draught, destination
+and positions. GPU work (TabPFN v2/TabICL challenger, trajectory encoder without coordinates)
+needs PyTorch >= 2.7 with cu128 wheels for the RTX 5060 Ti (sm_120). `sts` is the
 slowest stage (~76 min per window); if the build is too slow, that is the thing to profile, but
 only after the running build finishes. Then **P4-4 (calibration)**.
 
