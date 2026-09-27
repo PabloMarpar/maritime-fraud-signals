@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-25_
+_Last updated: 2026-09-27_
 
 ## Done
 
@@ -294,6 +294,23 @@ _Last updated: 2026-09-25_
   the next window in `docs/DECISIONS.md`. `analyst-review`: no blockers. `lightgbm` 4.7.0
   installed into the environment (was in `requirements.txt`, not installed).
 
+- **P4-3c done: static and declared-destination features beat R2 at small budgets, 2026-09-27.**
+  New `features/static.py`: per mmsi per window, `length_m`/`width_m`/`min|max_draught_m`/
+  `draught_range_m`, `n_destinations`, and three frozen destination regexes (`dest_russia`,
+  `dest_south_route` = Suez/India/Turkey/STS hubs, `dest_for_orders`). Plus `imo_serial` (the IMO
+  number as an age proxy: Spearman 0.977 vs Wikidata build year, 100% coverage, so no P4-1-style
+  contamination). Exploratory out-of-time check (train June with P4-3's 16 as-of positives, test
+  November): logistic regression **P@50 0.64, P@100 0.55, P@200 0.45 vs R2's 0.204**, all paired
+  CIs excluding 0; P@574 0.223 (ceiling 0.242). Unfitted rule `tanker AND (dest_russia OR
+  dest_south_route)`: 144 flagged, 55.6% precision, 17.8x lift. The gain is mostly the
+  destination; already-sanctioned vessels as extra positives HURT. **Caveats:** regexes were
+  written after seeing June's destinations (so only the new archive months are a clean test --
+  regexes and feature set are now FROZEN, see `docs/DECISIONS.md` 2026-09-27); a Russian-port
+  destination is close to the designation reason itself (README must say so). Not yet wired into
+  `pipeline.window`/`features.panel` (the running build re-imports them); run
+  `python -m features.static --start ... --end ...` per window after the build. Only verified into
+  a scratch dir; **nothing under `data/processed/static/` exists yet.** 49 new tests, `ruff` clean.
+
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (option A, author's call 2026-09-25).**
@@ -323,13 +340,21 @@ labels, test on the next) should give ~80-100 training positives and 6-8 cutoffs
 
 ## Next up
 
-**When P4-3b finishes: extend `model.lightgbm_risk` to a walk-forward evaluation** over every
-monthly cutoff, with the budgets and the no-exposure variant pre-registered in
-`docs/DECISIONS.md`'s P4-3 entry, and report the result per cutoff plus pooled. `sts` is the
+**When P4-3b finishes: run `python -m features.static` for every window, then extend
+`model.lightgbm_risk` to a walk-forward evaluation** over every monthly cutoff, with the budgets
+and the no-exposure variant pre-registered in `docs/DECISIONS.md`'s P4-3 entry and the frozen
+`static` variant from its 2026-09-27 P4-3c entry, and report the result per cutoff plus pooled.
+A deep literature/model search (trajectory DL, graphs, small-label learning, GPU stack for the
+RTX 5060 Ti) was launched 2026-09-27; its report lands in `reports/`. `sts` is the
 slowest stage (~76 min per window); if the build is too slow, that is the thing to profile, but
 only after the running build finishes. Then **P4-4 (calibration)**.
 
-**Improvement option B -- better signals, not just more data (author: keep as an option).**
+**Improvement option B -- better signals, not just more data (author: keep as an option).
+Destination + size + IMO-age are now done (P4-3c); the rest is task P4-3d. WARNING from the
+literature (CREA): flag changes and false flags mostly happen AFTER designation, so "flag changes
+over time" below would leak the label unless restricted to changes well before the cutoff.
+Newer candidates: pilotage refusal in the Danish straits (no rendezvous with a pilot boat) and
+long Skagen anchoring.**
 Today's detectors look for *unusual behaviour*, and sanctioned vessels in Danish waters don't
 behave unusually: they transit. What plausibly identifies them instead:
 - **Russian-port link** from our own AIS: declared destinations such as Primorsk / Ust-Luga /

@@ -1569,3 +1569,50 @@ _2026-09-25_ (P4-3: LightGBM, one out-of-time cutoff)
   the 4- vs ~22-month label-horizon mismatch, scores-not-probabilities, and that "not tuned on
   test" is an author statement frozen by the commit, not independently verifiable.
 - **No GPU.** Full run incl. 3x200 refits ~70s on CPU.
+
+_2026-09-27_ (P4-3c: static and declared-destination features -- `features/static.py`, pre-registered)
+
+- **Why.** P4-0..P4-3 showed the behavioural detectors carry ~no signal: future-sanctioned vessels
+  transit Danish waters normally. The literature agrees -- every shadow-fleet definition (KSE, CREA,
+  S&P, Lloyd's List) is structural (age >15y, Aframax class, Russian cargo, no IG P&I, new/opaque
+  owner), and a Sentinel-1 SAR study of Danish waters 2020-25 found no association between dark
+  ships and the shadow fleet. So the next signal is what a vessel *is* and where it *says* it goes,
+  both already in our own clean AIS (length, width, draught, destination) and never used.
+- **Exploratory result (one cutoff; train 2024-06 with P4-3's as-of labels = 16 positives, test
+  2024-11 = 4,449 rows / 139 positives; logistic regression C=0.3, class_weight=balanced,
+  median-imputed, standardized; paired bootstrap 1,000 over test rows vs R2 with random tie-break):**
+  P@50 0.640 [+0.290, +0.595], P@100 0.550 [+0.270, +0.448], P@200 0.450 [+0.196, +0.307],
+  P@574 0.223 [+0.010, +0.038] (ceiling 0.242), AUC 0.969 -- vs R2's flat 0.204. Unfitted rule
+  `tanker AND (dest_russia OR dest_south_route)`: 144 flagged, precision 0.556, lift 17.8x.
+  Ablation (same protocol): almost all the gain is the destination group (context+dest P@50 0.65);
+  size alone helps mainly at k=200 (0.39). Reproduced exactly from `features.static`'s own output.
+- **Honesty caveats.** (1) The destination regexes were written after looking at June 2024's
+  most common tanker destinations with labels running to 2026 -- mild data snooping; November was
+  then examined once. **Every other archive month is a clean test, hence the freeze below.**
+  (2) Declaring a Russian port is close to the designation criterion itself; not a leak (public
+  before designation) but the README must say the model finds "tankers in the Russian trade".
+  (3) Coverage is balanced (length non-null 99.2% vs 100%, any destination 100% vs 99.9% among
+  positive vs negative test tankers) -- no repeat of Wikidata's differential-coverage problem.
+  (4) Adding already-sanctioned vessels as extra training positives (16 -> 33) HURT (P@574 0.159
+  LightGBM / 0.167 logistic, CIs below R2): already-designated vessels behave differently, so the
+  literature's "borrow sanctioned vessels as positives" advice does not transfer here.
+- **Age proxy from the IMO number (`imo_serial = TRY_CAST(imo AS BIGINT)`).** IMO numbers are
+  issued roughly in build order: Spearman 0.977 vs Wikidata build year (n=3,784; tankers 0.973,
+  median error of a linear fit 0.9 years). Future-sanctioned test tankers median ~9.31M vs 9.47M
+  (older). Coverage is 100% of the modelling population by construction (it IS the population
+  key), so this recovers the age signal WITHOUT P4-1's Wikidata label contamination. Adds little
+  on top of destination (P@50 0.60-0.64) but helps without it. R3 in `model.baseline` is untouched
+  (still gated on Wikidata); this is a model feature, not a baseline rule.
+- **Frozen for the walk-forward evaluation (P4-3b), by this commit:** `features.static`'s three
+  regexes and column definitions; the feature set `is_tanker, is_foc, length_m, width_m,
+  max_draught_m, draught_range_m, imo_serial, dest_russia, dest_south_route, dest_for_orders,
+  n_destinations`; the model above (logistic C=0.3 balanced) as the primary "static" variant, with
+  LightGBM on the same columns (P4-3's PARAMS) as secondary; budgets k=50/100/200 plus R2's own
+  count; comparison vs R2 with the paired bootstrap; per-cutoff and pooled reporting. Any later
+  regex change must be a new, separately named column.
+- **Not integrated into `pipeline.window` or `features.panel` yet, on purpose:** the archive build
+  (`scripts/build_archive_windows.sh`) is running and re-imports both per window; changing them
+  mid-run would give different windows different code. `python -m features.static --start ...
+  --end ...` is run per window after the build (clean data is kept, nothing is pruned). Verified on
+  June/November into a scratch directory only (21,146 / 9,477 mmsi, ~50 s per window at 4 threads);
+  nothing written under `data/` while the build runs. 49 new tests.
