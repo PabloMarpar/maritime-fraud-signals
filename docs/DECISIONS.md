@@ -1725,3 +1725,53 @@ _2026-09-27_ (session close: decisions taken from the deep-research report)
 - **Research report and notes stay out of git** (author's call). They are in Spanish, while
   repo documentation is English; they are listed in `.git/info/exclude`, and STATE.md points to
   them.
+
+_2026-09-27_ (P5: the web front end, `viz/`, started ahead of order at the author's request)
+
+- **Why now, out of order.** The author asked to start the interactive map while P4-3b's archive
+  build runs, to iterate on it early. It only reads `data/` (DuckDB, 4 threads) and writes to
+  `viz/public/data/`, so it cannot interfere with the build.
+- **Prediction is frozen on the site (author's call).** No model beats R2 under the frozen
+  walk-forward protocol yet, so the site shows measured facts only: tracks, detector events,
+  identity, sanctions designations. Vessel panels are laid out so a score can be added once a
+  model is validated.
+- **Stack: Astro 7 + Svelte 5 + deck.gl 9.4 + MapLibre 5**, static output (hostable anywhere,
+  including the author's own domain), bilingual routes `/en/` and `/es/`, interactive islands
+  only where needed. MapLibre is pinned to v5: v6 moved the controls and popups out of the core
+  package. Plain CDN pages without a build step were considered and dropped once the author
+  asked for a polished multi-page site. Node 24 LTS is installed portable in
+  `%LOCALAPPDATA%\Programs\nodejs` (user PATH, no admin rights).
+- **Export format (`report/export_viz.py`), not GeoJSON/Arrow as P5-1 was worded.** Tracks are
+  three uint16 arrays (lon/lat quantized over `MAP_BBOX`, ~12 m; minutes since window start):
+  654k June points = 3.9 MB, against ~25 MB as JSON. Only the focus fleet is animated (tankers,
+  sanctioned vessels, both parties to STS episodes with confidence >= 0.5); all traffic is a Web
+  Mercator density raster (distinct vessels per pixel). Trips split at silences > 60 min and
+  implied jumps > 40 kn, so no straight line is ever drawn across a gap. `on_land` spoofing
+  (10M dockside rows) is left off the map. Dossiers exist for every vessel with a valid IMO,
+  every tanker and every vessel with a detector event (9,145 over June and November).
+- **Generated data is never committed** (`viz/public/data/` is gitignored). It is rebuilt by
+  `python -m report.export_viz` after each window and will be uploaded with the site (P5-3).
+- **Colour: three categorical hues, validated all-pairs** with the dataviz validator on the
+  dark surface `#0a1422`: blue = vessel, orange = on a sanctions list, aqua = detector event
+  (worst CVD dE 9.4, normal-vision 20.9). Five hues failed (magenta vs aqua, deutan dE 1.6),
+  so event kinds are told apart by glyph shape (dash, ring, diamond, triangle, dot), never by
+  colour. P5-2's "gaps in red" was dropped: red collides with the sanctions orange under
+  colour-blindness. Status colours appear only on the live connection pill, always with a label.
+- **The live page goes through a local relay (`ingest/aisstream.py`).** An AISStream key cannot
+  ship in a static page. The relay keeps it in `.env`, negotiates permessage-deflate, folds
+  position and static reports into one record per vessel, and broadcasts 1 Hz diffs on
+  `ws://127.0.0.1:8765` for the Danish straits and Gibraltar. **Not yet run against AISStream**
+  (no key yet); verified by 12 unit tests and a local mock of the browser protocol. Serving the
+  live page publicly needs an always-on relay (a small VPS or a Cloudflare Worker): undecided.
+- **Front-page case: NS LOTUS (IMO 9339337)**, chosen because every step is in this project's
+  own June 2024 data: in ballast (8.2 m) declaring EGSUZ>RUPRI on 17 Jun; last heard east of
+  Bornholm 19 Jun 18:31; heard again 26 Jun 08:46 at 14.0 m declaring RUULU>EGPSD (flagged by
+  `draught_change_unexplained`); designated by the UK on 31 Jul 2024 and by OFAC on 10 Jan 2025
+  as "Legacy", flag Barbados. The story's closing chart is computed in the browser from the
+  exported events and matches P4-0: June tankers sanctioned later vs other tankers with at
+  least one AIS gap 55% vs 79%, position anomaly 6% vs 8%, STS 0% vs 0.9%, draught change with
+  no port call 38% vs 24%.
+- **Open before publishing (P5-3).** The DMA's AIS licence and attribution terms are not
+  recorded in `docs/DATA_SOURCES.md`; the EU list comes via OpenSanctions (CC BY-NC 4.0: fine
+  for a non-commercial site with attribution); the author's domain and DNS; where the live relay
+  runs.

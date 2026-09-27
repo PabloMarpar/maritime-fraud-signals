@@ -2,7 +2,8 @@
 
 Detecting evasive vessel behaviour from open AIS data, validated against official sanctions lists.
 
-> **Status:** scaffolding. No analysis has been run yet. See [`docs/STATE.md`](docs/STATE.md).
+> **Status:** detectors, sanctions matching and the naive baseline are done; the forward-in-time
+> model evaluation is in progress; the web map is in development. See [`docs/STATE.md`](docs/STATE.md).
 
 ## The problem
 
@@ -47,6 +48,20 @@ possible verdicts are conditioned on there having been some vessel in the area t
 is plausible" is inferred from "the area is normally busy but nobody happened by". Neither is
 ground truth for what the receiver could actually hear at the moment in question.
 
+## Web map
+
+`viz/` is a static, bilingual (English/Spanish) site: a front-page story built on one real case,
+an animated explorer of each built month, vessel dossiers, vessel search and a live AIS view.
+
+```bash
+python -m report.export_viz            # export every built window to viz/public/data/ (reads data/ only)
+cd viz && npm install && npm run dev   # then open http://127.0.0.1:4321/
+python -m ingest.aisstream             # optional: live relay for /live/ (AISSTREAM_API_KEY in .env)
+```
+
+The site shows measured facts only: tracks, detector events, identity and sanctions
+designations. It publishes no risk scores until a model beats the baseline rule.
+
 ## Data sources
 
 All open, free, and publicly documented. See [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
@@ -74,7 +89,7 @@ docker run --rm -it \
   maritime-fraud-signals bash
 ```
 
-Secrets (e.g. the AISStream key, once `ingest/aisstream.py` exists) live in `.env` on the host and
+Secrets (e.g. the AISStream key used by `ingest/aisstream.py`) live in `.env` on the host and
 are mounted read-only at run time — never copied into the image.
 
 ## Licence

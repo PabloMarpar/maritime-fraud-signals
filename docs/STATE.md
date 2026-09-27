@@ -330,6 +330,19 @@ _Last updated: 2026-09-27_
   author's call). Its top-ranked next steps are now tasks P4-3g (discrete-time hazard model)
   and P4-3h (implied Russian loading from draught).
 
+- **P5 web front end started, 2026-09-27: ahead of order at the author's request, with
+  prediction frozen on the site (author's call).** `report/export_viz.py` (read-only on `data/`)
+  exports every built window to `viz/public/data/` (gitignored). June + November give 24,133
+  indexed vessels and 9,145 dossiers, ~5 MB per window plus 28 MB of dossiers, ~3 min at 4
+  threads. `viz/` is an Astro 7 + Svelte 5 + deck.gl + MapLibre 5 site, bilingual (`/en/`,
+  `/es/`), with six pages: front-page story (the NS LOTUS case), explorer (animated month, event
+  layers, timeline, vessel panel), vessel search, dossiers, live, and about.
+  `ingest/aisstream.py` relays AISStream to the live page but has **not been run against the
+  real service yet (no key)**. 24 new Python tests (export + relay), `ruff` clean, `astro check`
+  0 errors. Node 24 is portable in `%LOCALAPPDATA%\Programs\nodejs`. Run with
+  `cd viz && npm run dev`, then open http://127.0.0.1:4321/. Full detail in
+  `docs/DECISIONS.md`, 2026-09-27 "P5".
+
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
@@ -338,7 +351,7 @@ builds one window at a time, then `detect.gaps` per window, then `process.sancti
 then one panel per window at `data/processed/panel/window=<start>_<end>/`. Progress:
 `outputs/logs/build_archive_windows.status` (START/OK/FAIL per step, `DONE` at the end); per-step
 logs sit next to it.
-- **Status 2026-09-27 22:10.** Downloading May: 21 of 31 days clean. April's 30 days are
+- **Status 2026-09-27 23:32.** Build alive (PID 8820); May: 30 of 31 days clean. April's 30 days are
   downloaded but its window FAILED at start (a truncated raw partition left by a shutdown, since
   deleted). **After `DONE`, re-run the script once to build April** (and any other FAIL).
 - ~190 days remain at ~3 min/day, plus ~2.5 h of detectors per window (`sts` ~76 min). That is
@@ -365,12 +378,16 @@ logs sit next to it.
    post-designation rows hurt. Pre-register it before running.
 4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
    Thresholds are fixed on March 2024 only; validate against GFW port visits.
-5. Then P4-4 (calibration). Challengers from the research report:
+5. **Web (P5), in parallel:** add `AISSTREAM_API_KEY=` to `.env` and run
+   `python -m ingest.aisstream` to test the live page for real (P5-6). Decide hosting for the
+   author's own domain (P5-3), and check the DMA's AIS licence first. After the archive build,
+   run `python -m report.export_viz`, which picks up every built window automatically.
+6. Then P4-4 (calibration). Challengers from the research report:
    - TabPFN v2 / TabICL (licence-clean);
    - bagging PU (averaging models trained on resampled vessels whose label is unknown);
    - a trajectory encoder without coordinates, as a probable null.
    All need PyTorch >= 2.7 with cu128 wheels for the RTX 5060 Ti (sm_120).
-6. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
+7. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
    Flag/name changes mostly happen AFTER designation (CREA), so they leak unless restricted to
    well before the cutoff. Owner/manager networks are out (P4-3f NO-GO).
 

@@ -1,6 +1,6 @@
 {
   "project": "maritime-fraud-signals",
-  "updated": "2026-09-27 (P4-3c/P4-3e/P4-3f done; P4-3b build still running)",
+  "updated": "2026-09-27 (P5 web front end started; P4-3b build still running)",
   "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
   "tasks": [
     { "id": "P0-1", "phase": 0, "done": true, "description": "Scaffold repository: layout, continuity files, subagents, commands" },
@@ -47,12 +47,14 @@
     { "id": "P4-6", "phase": 4, "done": false, "description": "Run analyst-review for temporal leakage and validation honesty" },
     { "id": "P4-7", "phase": 4, "done": false, "description": "Write the label-bias section of the README" },
 
-    { "id": "P5-1", "phase": 5, "done": false, "description": "Export tracks, gaps and encounters as GeoJSON/Arrow for the map" },
-    { "id": "P5-2", "phase": 5, "done": false, "description": "deck.gl + MapLibre map: animated tracks, gaps in red, encounters marked" },
-    { "id": "P5-3", "phase": 5, "done": false, "description": "Publish to GitHub Pages; verify on mobile and desktop" },
-    { "id": "P5-4", "phase": 5, "done": false, "description": "Vessel dossier generator with explicit confidence levels" },
+    { "id": "P5-1", "phase": 5, "done": true, "description": "Export tracks, gaps and encounters for the map. Done 2026-09-27 as report/export_viz.py: uint16 binary tracks + JSON events/dossiers + a Web Mercator density raster, not GeoJSON/Arrow (size, see docs/DECISIONS.md). Re-run after every new window" },
+    { "id": "P5-2", "phase": 5, "done": true, "description": "deck.gl + MapLibre map: animated tracks, gaps, encounters marked. Done 2026-09-27: viz/ explorer page (Astro + Svelte). Gaps drawn in the validated event colour (aqua, dashed), not red, see docs/DECISIONS.md" },
+    { "id": "P5-3", "phase": 5, "done": false, "description": "Publish the site on the author's own domain (not GitHub Pages, author's call 2026-09-27); verify on mobile and desktop. Pending: domain + DNS, host, DMA licence check, hosting ~35 MB of exported data" },
+    { "id": "P5-4", "phase": 5, "done": false, "description": "Vessel dossier generator with explicit confidence levels. Dossier pages exist (viz /vessel/?mmsi=); confidence levels wait for a model that beats R2, prediction is frozen on the site by the author (2026-09-27)" },
+    { "id": "P5-5", "phase": 5, "done": true, "description": "Front-page story (NS LOTUS case), vessel search and about page, bilingual EN/ES. Done 2026-09-27" },
+    { "id": "P5-6", "phase": 5, "done": false, "description": "Run the live relay against real AISStream once AISSTREAM_API_KEY is in .env: message rates, static-report coverage, the page under real load" },
 
-    { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled" },
+    { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled. Relay (ingest/aisstream.py, Danish straits + Gibraltar, compression on) and live page built 2026-09-27; not yet run against AISStream (needs AISSTREAM_API_KEY in .env); no capture to disk yet" },
     { "id": "P6-2", "phase": 6, "done": false, "description": "Scheduled ingestion via GitHub Actions" },
     { "id": "P6-3", "phase": 6, "done": false, "description": "Reproduce a known case: score a sanctioned vessel on its pre-designation history" },
     { "id": "P6-4", "phase": 6, "done": false, "description": "Final README and second analyst-review pass" }
