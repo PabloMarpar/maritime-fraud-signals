@@ -1616,3 +1616,68 @@ _2026-09-27_ (P4-3c: static and declared-destination features -- `features/stati
   --end ...` is run per window after the build (clean data is kept, nothing is pruned). Verified on
   June/November into a scratch directory only (21,146 / 9,477 mmsi, ~50 s per window at 4 threads);
   nothing written under `data/` while the build runs. 49 new tests.
+
+_2026-09-27_ (P0: the pooled walk-forward evaluation protocol, frozen before any new window is scored)
+
+- **Why now.** With 16-140 positives per cutoff the binomial half-width of precision@50 is ~±14
+  points: no single cutoff can separate two good models. Every result from P4-3b onwards is read
+  through this protocol, so it is fixed before the archive build produces anything to look at.
+  Source: the 2026-09-27 deep-research report (`reports/Modelos para predecir la flota
+  fantasma.md`, P0) plus this project's own P4-0..P4-3c conventions.
+- **Cutoffs.** One per built-and-verified monthly window W_m; the cutoff is W_m's `window_start`.
+  Training may use only windows that ended before the cutoff and only designations dated strictly
+  before it. **Primary pooled set: test months 2024-08..2025-02 (7 cutoffs, >= 3 training months
+  each).** 2024-05..2024-07 are reported per cutoff only (too little history to train on). A month
+  missing from the build is dropped and reported as missing, never replaced.
+- **Labels and population.** `model.evaluation.POPULATION_WHERE_SQL` per window (valid IMO, not
+  sanctioned as of `window_end`). Primary test label: eventual designation after `window_end`
+  (as in P4-0..P4-3). Secondary: designation within 12 months of `window_end`, which gives every
+  cutoff the same horizon. **Label snapshot frozen:** `data/reference/sanctions.parquet` built
+  2026-09-21 19:22 UTC (2,205 records, last designation 2026-08-24); a refetch is a new evaluation.
+- **Budgets.** Primary, per `CLAUDE.md`: R2's own flagged count in each cutoff. Secondary:
+  k = 50/100/200 (pre-registered in P4-3). A model that wins only at the secondary budgets is
+  reported as "better at small alert budgets", not as "beats R2".
+- **Ties.** Every score's precision@k is the EXPECTED precision under uniformly random
+  tie-breaking at the cutoff boundary, so a binary rule such as R2 scores its flagged-set
+  precision at any k <= its flag count. This replaces `model.baseline`'s mmsi-order tie-break
+  for this evaluation only (that artifact is documented in its docstring).
+- **Pooling.** Micro-average: total expected hits over all pooled cutoffs divided by total
+  budget. Per-cutoff figures are always reported next to the pooled one, and so is the pooled
+  ceiling sum(min(n_pos, k)) / sum(k).
+- **Uncertainty.** Paired cluster bootstrap, 2,000 resamples, 95% percentile interval of the
+  pooled difference (model minus reference). **Clusters = IMO**: a vessel's rows in every cutoff
+  move together, because the same tanker appears in many months. Secondary clustering: the
+  designation package (sanctioning source + date of the vessel's earliest designation) for
+  positives, IMO for negatives. One OFAC action listed 183 vessels, so co-designated vessels are
+  not independent evidence. The matched budget is recomputed inside every resample.
+- **Decision rule.** "A beats B" iff the IMO-clustered interval of the pooled difference at the
+  primary budget excludes 0. A win that disappears under package clustering is reported with
+  that caveat. Hyperparameters may be chosen only on cutoffs earlier than the one scored; the
+  variants frozen so far are R2, P4-3's `context`/`detectors`/`detectors_context` (+ its
+  no-exposure variant), and P4-3c's `static` (logistic, plus LightGBM secondary).
+
+_2026-09-27_ (P4 gate: OpenSanctions owner/manager coverage, criteria fixed before measuring)
+
+- **Question.** Can owner/manager links for the vessels in our panel come from a legal, free,
+  dated source without contaminating the label? The literature ranks "shares a manager/owner with
+  an already-sanctioned vessel" as the strongest missing signal (Port State Control's "company
+  performance"; KSE/C4ADS network findings). It is the same shape of gate as P4-1's Wikidata
+  build-year gate.
+- **Source.** OpenSanctions bulk data (CC BY-NC 4.0, non-commercial use). Downloaded to a scratch
+  directory, NOT under `data/`, while the archive build runs. The dataset version/date is
+  recorded.
+- **Population.** P4-0's evaluation population in the June and November panels. The gate is
+  judged on tankers (where R2 and the static model operate) and also reported for the whole
+  population.
+- **"Covered" vessel.** Its IMO matches an OpenSanctions vessel with at least one link to an
+  owner/operator/manager organisation, where (a) the link's `first_seen` is before the panel's
+  cutoff (the first day of the next month) and (b) at least one of its source datasets is NOT a
+  sanctions list. The Ukrainian GUR `ua_war_sanctions` dataset counts as label-like and is
+  measured separately, not as independent coverage. Links derived from sanction status
+  (`sanction.linked`/`sanction.control` topics) never count.
+- **Checks.** G1 coverage: at least 50% of tankers covered. G2 differential coverage: the
+  covered rate among future-designated vs never-designated tankers, Fisher's exact test, and the
+  AUC of "covered" as a predictor with a stratified bootstrap 95% interval. G2 passes iff that
+  interval includes 0.5. **GO iff G1 and G2 both pass, in both panels.** If per-link `first_seen`
+  is not available in the free bulk data, the verdict is NO-GO by construction (links cannot be
+  gated in time). Also reported: the share of links whose only sources are sanctions lists.
