@@ -1,0 +1,57 @@
+---
+import '../styles/global.css';
+import 'flag-icons/css/flag-icons.min.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { LANGS, localePath, t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+  /** path after the language segment, e.g. "explore/" */
+  path: string;
+  title?: string;
+  description?: string;
+  /** "app": full-viewport map page, header overlaid, no footer */
+  mode?: 'page' | 'app';
+}
+
+const { lang, path, title, description, mode = 'page' } = Astro.props;
+const siteName = t(lang, 'site.name');
+const fullTitle = title ? `${title} · ${siteName}` : siteName;
+const desc = description ?? t(lang, 'site.description');
+---
+
+<!doctype html>
+<html lang={lang} data-mode={mode}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={desc} />
+    <meta name="theme-color" content="#04080f" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={desc} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}favicon.svg`} />
+    {LANGS.map((l) => <link rel="alternate" hreflang={l} href={localePath(l, path)} />)}
+  </head>
+  <body class:list={[`mode-${mode}`]}>
+    <Header lang={lang} path={path} overlay={mode === 'app'} />
+    <main>
+      <slot />
+    </main>
+    {mode === 'page' && <Footer lang={lang} />}
+  </body>
+</html>
+
+<style is:global>
+  body.mode-app {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  body.mode-app main {
+    position: fixed;
+    inset: 0;
+  }
+</style>

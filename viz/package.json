@@ -1,0 +1,36 @@
+{
+  "name": "maritime-fraud-signals-viz",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "shots": "node scripts/screenshots.mjs"
+  },
+  "dependencies": {
+    "@astrojs/svelte": "^9.0.1",
+    "@deck.gl/core": "^9.4.0",
+    "@deck.gl/extensions": "^9.4.0",
+    "@deck.gl/geo-layers": "^9.4.0",
+    "@deck.gl/layers": "^9.4.0",
+    "@deck.gl/mapbox": "^9.4.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/newsreader": "^5.3.0",
+    "astro": "^7.3.5",
+    "flag-icons": "^7.5.0",
+    "maplibre-gl": "^5.24.0",
+    "svelte": "^5.57.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "latest",
+    "playwright": "^1.63.0",
+    "typescript": "^5.9.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

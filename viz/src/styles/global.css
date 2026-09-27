@@ -1,0 +1,305 @@
+/*
+ * Design tokens and base styles.
+ *
+ * Dark-only by design: every page is built around a night map. Data colours are three
+ * categorical slots validated all-pairs against --bg-1 with the dataviz skill's validator
+ * (dark mode, CVD dE >= 9.4, normal-vision dE >= 20.9, contrast >= 3:1):
+ *   --c-vessel  blue    ordinary vessels
+ *   --c-listed  orange  vessels on a sanctions list (always paired with an icon + label)
+ *   --c-event   aqua    detector events (told apart by glyph shape, never by colour)
+ * All-traffic density uses an achromatic cool-grey ramp so it recedes behind them.
+ */
+
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/newsreader';
+@import '@fontsource-variable/newsreader/wght-italic.css';
+@import '@fontsource-variable/jetbrains-mono';
+
+:root {
+  color-scheme: dark;
+
+  --bg-0: #04080f;
+  --bg-1: #0a1422;
+  --bg-2: #0f1b2d;
+  --bg-3: #16243a;
+  --glass: rgba(9, 17, 30, 0.72);
+  --glass-strong: rgba(9, 17, 30, 0.9);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  --text-1: #eef2f7;
+  --text-2: #b4bfce;
+  --text-3: #7d8aa0;
+
+  --c-vessel: #3987e5;
+  --c-listed: #d95926;
+  --c-event: #199e70;
+  --c-listed-soft: rgba(217, 89, 38, 0.14);
+  --c-event-soft: rgba(25, 158, 112, 0.14);
+  --c-vessel-soft: rgba(57, 135, 229, 0.14);
+
+  --font-ui: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Newsreader Variable', Georgia, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', monospace;
+
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 18px;
+  --shadow-panel: 0 18px 50px -12px rgba(0, 0, 0, 0.65), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --header-h: 60px;
+  --gutter: clamp(16px, 4vw, 40px);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(57, 135, 229, 0.08), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(25, 158, 112, 0.05), transparent 60%),
+    var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+}
+
+img,
+svg,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: rgba(57, 135, 229, 0.35);
+}
+
+:focus-visible {
+  outline: 2px solid var(--text-1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Glass panel used over maps */
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px;
+  font-weight: 550;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    transform 0.2s var(--ease-out);
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  background: var(--text-1);
+  color: var(--bg-0);
+  border-color: var(--text-1);
+}
+
+.btn-primary:hover {
+  background: #ffffff;
+  border-color: #ffffff;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Badges: identity colour + icon + text, never colour alone */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+.badge-listed {
+  color: #ffd9c9;
+  border-color: rgba(217, 89, 38, 0.6);
+  background: var(--c-listed-soft);
+}
+
+.badge-event {
+  color: #c7f3e2;
+  border-color: rgba(25, 158, 112, 0.6);
+  background: var(--c-event-soft);
+}
+
+.badge-vessel {
+  color: #d3e5fb;
+  border-color: rgba(57, 135, 229, 0.6);
+  background: var(--c-vessel-soft);
+}
+
+/* Flags (flag-icons) */
+.flag {
+  display: inline-block;
+  width: 1.33em;
+  height: 1em;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background-size: cover;
+  background-position: center;
+  vertical-align: -0.12em;
+  flex: none;
+}
+
+.flag-unknown {
+  background: repeating-linear-gradient(45deg, #2a3446 0 3px, #1c2433 3px 6px);
+}
+
+/* MapLibre chrome, restyled for the dark glass look */
+.maplibregl-ctrl-group {
+  background: var(--glass) !important;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-panel) !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--line) !important;
+}
+
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1) opacity(0.8);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(4, 8, 15, 0.6) !important;
+  color: var(--text-3) !important;
+  font-size: 10px !important;
+  border-radius: 6px 0 0 0;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--text-2) !important;
+}
+
+.maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body.mode-app .maplibregl-ctrl-top-right {
+  top: calc(var(--header-h) + 6px);
+}

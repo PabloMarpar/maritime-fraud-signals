@@ -1,0 +1,85 @@
+---
+import Logo from './Logo.astro';
+import { t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+---
+
+<footer class="site-footer">
+  <div class="inner">
+    <div class="about">
+      <div class="brand"><Logo size={22} /> <strong>{t(lang, 'site.name')}</strong></div>
+      <p class="tagline">{t(lang, 'site.tagline')}</p>
+      <p class="disclaimer">{t(lang, 'footer.disclaimer')}</p>
+    </div>
+    <div class="sources">
+      <div class="eyebrow">{t(lang, 'footer.sources')}</div>
+      <ul>
+        <li>{t(lang, 'footer.ais')}</li>
+        <li>{t(lang, 'footer.sanctions')}</li>
+        <li>{t(lang, 'footer.basemap')}</li>
+      </ul>
+      <a class="code" href="https://github.com/PabloMarpar/maritime-fraud-signals">{t(lang, 'footer.code')} ↗</a>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--line);
+    padding: 48px var(--gutter) 56px;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  .inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 40px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-1);
+    font-size: 14px;
+  }
+
+  .tagline {
+    margin: 12px 0 0;
+    max-width: 44ch;
+  }
+
+  .disclaimer {
+    margin: 16px 0 0;
+    max-width: 52ch;
+    color: var(--text-3);
+    font-size: 12.5px;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0 16px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .code {
+    color: var(--text-1);
+    text-decoration: none;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  @media (max-width: 720px) {
+    .inner {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
