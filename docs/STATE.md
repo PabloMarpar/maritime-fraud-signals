@@ -297,30 +297,24 @@ _Last updated: 2026-09-25_
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (option A, author's call 2026-09-25).**
-`scripts/build_archive_windows.sh`, launched 2026-09-25 13:47 as a detached process (PID 28256,
-survives the Claude session): windows 2024-04..2025-02 one at a time (March 2024 is only April's
-lead-in; June/November already exist and are only verified), `detect.gaps` per window, then
-`process.sanctions_match --force` and one panel per window at
+`scripts/build_archive_windows.sh`: windows 2024-04..2025-02 one at a time (March 2024 is only
+April's lead-in; June/November already exist and are only verified), `detect.gaps` per window,
+then `process.sanctions_match --force` and one panel per window at
 `data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
-(START/OK/FAIL per step, `DONE` at the end); per-step logs next to it. Idempotent -- if it dies,
-re-run the same script and it resumes. **Never start a second build over `data/` while it runs.**
-**Blocker observed at launch (2026-09-25 ~14:00): the internet connection is very slow** -- ~120
-KB/s to the DMA S3 bucket and ~155 KB/s to a generic speed test, so it's the local connection,
-not S3. One raw day (~500 MB) then takes ~1 h and the 272 days would take >10 days. Left running
-unchanged per the author; if the connection recovers it speeds up by itself. How to check:
-`outputs/logs/build_archive_windows.status` and the size of the zip under `data/tmp/dma-<day>-*/`.
-How to stop, if the author decides to: kill the `bash.exe` running the script and its `python`
-children (check with `Get-Process python`), then re-run the script later -- every step is
-idempotent; a half-downloaded day is re-fetched from scratch. **Update 14:05: the April window
-FAILED** -- the connection dropped entirely for a few minutes (`getaddrinfo failed` after three
-read timeouts on 2024-03-02), `ingest/dma.py` exhausted its 5 retries, and the script moved on to
-May as designed (connection back at 14:05, S3 HEAD in <1 s). **April must be retried: after the
-script prints `DONE`, re-run it once** -- finished steps are skipped. Robustness gap found:
-every retry restarts the ~500 MB file from byte 0, which on a slow, flaky connection may never
-finish; S3 supports HTTP Range (206 confirmed), so resuming a partial download in
-`ingest.dma._fetch_day` would fix it -- not changed while the build runs. Other agents working in parallel
-must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans that compete for
-disk).
+(START/OK/FAIL per step, `DONE` at the end); per-step logs next to it.
+**History.** First launch 2026-09-25 13:47 failed in cascade: the connection was slow (~120 KB/s)
+and then dropped for a few minutes (DNS `getaddrinfo failed`), exhausting `ingest.dma`'s ~30 s
+retry budget, so every window failed within an hour and only 2024-04-01 got downloaded (the
+script printed `DONE` at 14:40 with FAIL on everything except June/November). The machine was
+later switched off, which lost nothing further. Fixed in commit 4118a61: `ingest.dma._fetch_day`
+now resumes a dropped transfer with HTTP Range and waits out outages (10 attempts without
+progress, backoff capped at 60 s, ~6 min). **Relaunched 2026-09-27 16:46** (detached, PID 26284);
+connection now ~9 MB/s, ~75 s per raw day. Rough estimate: ~9 h of downloads plus ~2.5 h of
+detectors per window (`sts` alone ~76 min), i.e. **~1.5 days if the machine stays on**.
+**If the machine is switched off or sleeps, the build stops; just re-run the script** -- every
+step is idempotent and skips what is already built. If some windows end in FAIL, re-run it once
+more after `DONE`. **Never start a second build over `data/` while it runs**; other agents working
+in parallel must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans).
 Disk: ~272 new days x ~0.47 GB ~ 128 GB of clean data against ~239 GB free, so no pruning needed.
 Why: P4-3 had 16 training positives and one cutoff; 109 of the vessels already matched in our
 AIS were designated inside the archive period, and designations peak in 2024-Q4 (130) and
