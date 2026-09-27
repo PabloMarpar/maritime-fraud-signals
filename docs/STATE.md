@@ -311,7 +311,7 @@ now resumes a dropped transfer with HTTP Range and waits out outages (10 attempt
 progress, backoff capped at 60 s, ~6 min). **Relaunched 2026-09-27 16:46** (detached, PID 26284);
 connection now ~9 MB/s, ~75 s per raw day. Rough estimate: ~9 h of downloads plus ~2.5 h of
 detectors per window (`sts` alone ~76 min), i.e. **~1.5 days if the machine stays on**.
-**If the machine is switched off or sleeps, the build stops; just re-run the script** -- every
+**Status 2026-09-27 17:51: STOPPED -- the machine was switched off again (~1 h after the relaunch).** On disk: 2024-03-02..2024-03-20 (19 days, last two verified readable with DuckDB) and 2024-04-01; ~3 min per day measured (download + clean). A half-finished download of 2024-03-21 sits in `data/tmp/dma-2024-03-21-*` (harmless, re-fetched from scratch; the author has not yet decided whether to delete it). ~250 days remain. **Next step: re-run the script.** **If the machine is switched off or sleeps, the build stops; just re-run the script** -- every
 step is idempotent and skips what is already built. If some windows end in FAIL, re-run it once
 more after `DONE`. **Never start a second build over `data/` while it runs**; other agents working
 in parallel must not write under `data/` (reading via DuckDB is fine, but avoid heavy scans).
