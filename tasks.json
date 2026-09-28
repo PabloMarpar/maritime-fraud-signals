@@ -1,6 +1,6 @@
 {
   "project": "maritime-fraud-signals",
-  "updated": "2026-09-27 (P5 web front end started; P4-3b build still running)",
+  "updated": "2026-09-28",
   "note": "Granular task list. Mark done:true as each is completed, via /cerrar.",
   "tasks": [
     { "id": "P0-1", "phase": 0, "done": true, "description": "Scaffold repository: layout, continuity files, subagents, commands" },
@@ -52,7 +52,7 @@
     { "id": "P5-3", "phase": 5, "done": false, "description": "Publish the site on checkgraph.dev, the author's domain (not GitHub Pages, author's call 2026-09-27); verify on mobile and desktop. DNS is on Cloudflare; today it serves the author's old fake-review-detector site on Netlify. Pending: author's go-ahead, host (Cloudflare Pages recommended), DMA licence check. The built site is 68 MB / 9,352 files" },
     { "id": "P5-4", "phase": 5, "done": false, "description": "Vessel dossier generator with explicit confidence levels. Dossier pages exist (viz /vessel/?mmsi=); confidence levels wait for a model that beats R2, prediction is frozen on the site by the author (2026-09-27)" },
     { "id": "P5-5", "phase": 5, "done": true, "description": "Front-page story (NS LOTUS case), vessel search and about page, bilingual EN/ES. Done 2026-09-27" },
-    { "id": "P5-6", "phase": 5, "done": false, "description": "Run the live relay against real AISStream once AISSTREAM_API_KEY is in .env: message rates, static-report coverage, the page under real load" },
+    { "id": "P5-6", "phase": 5, "done": true, "description": "Run the live relay against real AISStream. Done 2026-09-28: ~25 msg/s, 3,210 vessels after ~10 min (Gibraltar sparse, 89), static reports fill in over ~6 min; page fine at 3,000+ vessels. A public relay host (wss) is still open, see P5-3" },
 
     { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled. Relay (ingest/aisstream.py, Danish straits + Gibraltar, compression on) and live page built 2026-09-27; not yet run against AISStream (needs AISSTREAM_API_KEY in .env); no capture to disk yet" },
     { "id": "P6-2", "phase": 6, "done": false, "description": "Scheduled ingestion via GitHub Actions" },

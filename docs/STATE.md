@@ -386,10 +386,15 @@ logs sit next to it.
 4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
    Thresholds are fixed on March 2024 only; validate against GFW port visits.
 5. **Web (P5), in parallel:**
-   - **Live (P5-6):** `.env` exists but has no `AISSTREAM_API_KEY` yet (checked 2026-09-28), so
-     the live page shows its offline card. The author adds the key; then run
-     `python -m ingest.aisstream`. A public site also needs the relay on an always-on machine with
-     `wss://` (e.g. `live.checkgraph.dev`); not chosen yet.
+   - **Live (P5-6 done 2026-09-28):** the key is in `.env`, and the relay works against real
+     AISStream. After ~10 min: 3,210 vessels (3,121 Danish straits, 89 Gibraltar, which is sparse
+     in AISStream), ~25 msg/s, 713 with a destination, 449 with an IMO (static reports arrive
+     every ~6 min). The page handled 3,000+ vessels with no errors. It already showed a listed
+     tanker live: CELT (ex-CALLISTO, IMO 9299692, UK 2024-10-17, OFAC 2025-01-10). Locally it
+     works only while `python -m ingest.aisstream` runs. A public site needs the relay on an
+     always-on machine with `wss://` (e.g. `live.checkgraph.dev`); not chosen yet. The dev server
+     can time out while the archive build loads the machine: use `npx astro build` +
+     `npx astro preview` instead.
    - **Publishing (P5-3):** the domain is **checkgraph.dev**, retired from the author's
      `fake-review-detector` project. Its DNS is on Cloudflare (norman/jocelyn.ns.cloudflare.com).
      Today the apex A record (75.2.60.5) and `www` (CNAME to `fake-review-detector-s.netlify.app`)
