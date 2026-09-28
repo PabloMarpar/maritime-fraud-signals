@@ -1886,3 +1886,31 @@ _2026-09-28_ (P5-9: the shadow-fleet page and share cards, author's pick)
   both ways and identical schema. `process.clean` and `ingest.dma._csv_to_parquet` now write a
   `.tmp` sibling and `os.replace` it: shutdowns and kills had left truncated partitions (2024-03-21
   raw, 2024-07-09 clean, 2025-01-15 raw) that the "already done" checks would skip for good.
+- **`process.tracks` and `process.identity` materialize their result once.** Each ran its
+  window-function / aggregation view chain over every point in the window (~300M rows) once per
+  summary count and again for the write -- four and five full passes. Now one `CREATE TEMP TABLE`
+  feeds the counts and the write. Voyages on November: ~19 min -> 171 s, same 35,680 voyages;
+  44 differ only in start/end lat/lon, the known equal-timestamp tie of `arg_min`/`arg_max` (same
+  class as `impossible_speed`'s `lag()` tie), not a change in logic.
+- **`check_on_land` splits the eroded land into a 0.1-degree grid before the join.** The
+  `SPATIAL_JOIN` prunes only by bounding box, and a big piece (Jutland, southern Sweden) has a box
+  covering most of the nearby sea, so nearly every point paid a full `ST_Contains` against
+  thousands of vertices. Split into cells (73 pieces -> 3,538, at most 32 vertices, cells
+  overlapping by 1e-6 degrees so a point on a grid line stays inside one cell): one day 44-63 s ->
+  1.1-1.6 s, identical rows (0 missing, 0 extra) on five real days in April, June and November
+  2024. Real May window: 127 s for 31 days, where April's run had not finished after 3.5 h.
+- **`on_land` rows stay in DuckDB.** `build_spoofing_events` fetched ~12M on_land rows into
+  `SpoofingEvent`s and inserted them back with `executemany`, which runs at ~3,200 rows/s: about an
+  hour per window in a fresh process, and May's run spent 17:48-19:40 in that one call. Now
+  `_build_on_land_table` writes `_on_land` and the output reads it with SQL; `check_on_land` still
+  returns `SpoofingEvent`s. 2024-04-03..04: 9.9 s vs 191 s, identical on_land rows (the only
+  differences were the known `impossible_speed` tie-break and last-digit float noise in one
+  `synthetic_circle` row, neither touched by this change).
+- **`python -m pipeline.window` runs each producer in a fresh process.** On Windows DuckDB
+  allocates from the process heap (no jemalloc there), and after hours of heavy queries in one
+  process its allocations serialize on the heap lock: py-spy showed April's on_land worker waiting
+  in `RtlAllocateHeap`, at ~1.7 of 16 cores for 3.5 h; November's `sts` took 76 min where a fresh
+  process needs ~5 (3 April days: `slots` 6.5 s/day). DuckDB threads are not the main cause, but
+  more is not better either: `sts` slots on 3 days took 19.5 s at 4 threads, 25.0 s at 8, 29.8 s
+  at 16. `process_window(isolate_steps=False)` stays the default so tests can monkeypatch; the CLI
+  isolates unless `--in-process`.

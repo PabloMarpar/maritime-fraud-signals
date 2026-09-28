@@ -358,82 +358,47 @@ _Last updated: 2026-09-28_
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
-`scripts/build_archive_windows.sh`, **relaunched 2026-09-28 12:50 via WMI (bash PID 30940, parent
-`WmiPrvSE`)**. It builds one window at a time, then `detect.gaps` per window, then
-`process.sanctions_match --force`, then one panel per window at
-`data/processed/panel/window=<start>_<end>/`. **New since 12:50: two background backfills**
-(`prefetch_2024-07`: 2024-07-01..10-01, `prefetch_2024-12`: 2024-12-01..2025-02-26) download+clean
-later months while April/May/June run their detectors; the July and December windows `wait` for
-their backfill first, so no two processes ever touch the same day. Downloads are bandwidth-bound
-(measured: 1 stream 9.4 MB/s, 4 streams 12.5 MB/s total, so more parallel downloads barely help);
-overlapping them with the CPU-bound detectors is the win, ~20 h -> ~15 h if uninterrupted.
-`data/manifest.json` is now lock-protected (`pipeline.manifest._locked`) -- without it, a
-concurrency test kept 10 of 60 entries. Progress: `outputs/logs/build_archive_windows.status`
-(START/OK/FAIL per step, `DONE` at the end); per-step logs sit next to it (appended across runs,
-so an old `Traceback` in a log does not mean the current run failed).
-- **Status 15:40 2026-09-28.** April window still in `check_on_land` (since 13:58), slowed by a
-  backfill competing for CPU. **`prefetch_2024-07` died at 13:28** with no traceback while cleaning
-  2024-07-09 (26.5M raw rows); the Windows logs show no application crash or low-memory event, so
-  the cause is unknown. It left a truncated clean 2024-07-09 (deleted; its raw file is complete
-  and on disk, manifest `raw_only`, so the next backfill re-cleans it). 2024-07-01..07-08 clean.
-- **Cleaning is now ~20x faster (commit 136adb3):** `process.clean` ran the dedup twice (count,
-  then COPY) and numbered rows with `row_number() OVER ()` (a serial pass); now it dedups once by
-  the reader's `file_row_number` and counts from the written file. Real 2024-07-09: 101 s -> 5 s,
-  identical rows (EXCEPT ALL both ways = 0) and schema. Both `process.clean` and
-  `ingest.dma._csv_to_parquet` now write to `part-0.parquet.tmp` and rename, so a killed process
-  can no longer leave a truncated partition that later runs skip as done.
-- **Background downloads restarted with the new code at 15:38 (WMI):** the old
-  `prefetch_2024-12` (old slow clean, hogging CPU) was stopped by PID after 2025-01-14 (it left a
-  truncated raw 2025-01-15, deleted). Now running: `prefetch2_summer` 2024-07-09..10-01 and
-  `prefetch2_winter` 2025-01-15..02-26, logs `outputs/logs/prefetch2_*.log`, START/OK/FAIL lines
-  in the same status file. The build script's own `wait`s refer to the old (dead) prefetches, so
-  the July and December windows no longer wait: the July window must not start before
-  `prefetch2_summer` has finished July -- it won't (April+May+June detectors come first, hours),
-  but check the status file if timings change.
-- **Killed again at ~11:41 (5 min after the 11:36 WMI launch), no error, no reboot.** WMI-launched
-  processes are verified NOT to be in a job object (`IsProcessInJob` = False), so the WMI launch
-  itself is fine. At the same time the other agent finished a ~10 min test of its live relay
-  (`ingest.aisstream`), which also died; most likely it stopped processes by name and took the
-  build (bash + python) with it. **Other agents: never kill `python`/`bash` processes by name --
-  stop only the PID you started.** The build's processes are `pipeline.window`,
-  `pipeline.backfill`, `detect.gaps`, `features.panel` under a `bash.exe` whose parent is
-  `WmiPrvSE`.
-  - *Note from the web session:* it never stopped `python` or `bash` processes by name. It only
-    stopped node/workerd processes by PID, or by a `wrangler`/`workerd` command line, at ~11:22
-    and ~13:05. It was idle around 11:41. Its own relay (`python -m ingest.aisstream`, started
-    11:19 as a Claude Code background task) had also died by 12:30 without being stopped. So both
-    probably died from one common cause, still unknown. The public relay now runs on Cloudflare,
-    so no local relay needs to run next to the build.
-- **Why it died on 2026-09-28 (~09:00-11:00) with no error:** the machine did NOT reboot. It had
-  been started with `Start-Process` from a Claude Code session, and Windows kills a session's child
-  processes when the session exits (job object). **Always launch it via WMI**, which parents it to
-  `WmiPrvSE`, outside the session: PowerShell `Invoke-CimMethod -ClassName Win32_Process
-  -MethodName Create -Arguments @{CommandLine = '"<Git>/bin/bash.exe" scripts/build_archive_windows.sh';
-  CurrentDirectory = '<repo root>'}` (Git bash is at `C:/Program Files/Git/bin/bash.exe`).
-- **Why May's `check_on_land` ran >6 h: the 8-worker thread pool was counterproductive.** Fixed
-  (`ON_LAND_MAX_WORKERS = 1`, ~30 min per window expected) -- see `docs/DECISIONS.md` 2026-09-28.
-- **Clean on disk at the 12:50 relaunch:** 2024-03 (22 d), 04 (30), 05 (31), 06, 10, 11 -- ~84 of
-  ~272 new days (~31%). This run starts with April (its earlier FAIL is retried naturally), then
-  May (spoofing restarts from scratch: it was killed before writing).
-- The other agent's live relay (`python -m ingest.aisstream`, P5-6) may run at the same time; it
-  writes nothing to disk, so it does not conflict with the build -- but see the kill note above.
-- Uninterrupted, a day takes ~1.6 min (download ~50 s + clean ~45 s); ~190 days remain, now
-  overlapped with ~1.5-2 h of detectors per window (`sts` ~76 min is the slowest step). That is
-  **~15 h if the machine stays on**.
-- **If the machine sleeps or shuts down, the build stops.** Validate the last written day with
-  DuckDB (a shutdown mid-write can leave a truncated partition), then just re-run the script:
-  every step is idempotent.
-- **Never start a second build over `data/` while it runs.** Parallel work may read `data/`
-  through DuckDB (keep it to ~4 threads) but must not write there. **Do not edit
-  `scripts/build_archive_windows.sh` while it runs** -- bash reads a script as it executes it.
-- A stale partial download `data/tmp/dma-2024-04-02-*` is harmless; delete it after `DONE`.
-- Disk: ~128 GB of new clean data against ~239 GB free; no pruning needed. **Do not prune clean
-  data**: `features.static` and P4-3h need message-level draught, destination and positions.
+Runs unattended, launched via WMI (survives the Claude session). Progress:
+`outputs/logs/build_archive_windows.status` (START/OK/FAIL per step, `DONE` at the end), per-step
+logs next to it (appended across runs -- an old `Traceback` there is not the current run).
+- **Running (2026-09-28 19:45):** only `scripts/build_archive_windows.sh` (bash PID 30940,
+  started 12:50): windows one at a time (April, May, June, Jul..Oct, Nov verify, Dec..Feb),
+  `detect.gaps` per window, then `process.sanctions_match --force` and one panel per window.
+  **April and May are marked FAIL on purpose**: both were stopped by PID (17:36 and 19:40) because
+  they ran the old slow code; the script skips a failed window and goes on. June verified in 51 s;
+  July started 19:40 with all three fixes below.
+- **All downloads are done:** `prefetch2_winter` OK 17:08, `prefetch2_summer` OK 19:38. Every day
+  2024-03-02..2025-02-26 (362) is clean on disk.
+- **Three speed fixes this session** (`docs/DECISIONS.md` 2026-09-28, commits 83da129, d646e1c,
+  943ab68): `on_land` land split into a 0.1-degree grid (one day 44-63 s -> ~1.5 s, identical rows);
+  `on_land` rows kept in DuckDB instead of `executemany` (~1 h per window saved, identical rows);
+  `python -m pipeline.window` runs every producer in a fresh process (the Windows heap lock had
+  slowed April's `on_land` and November's `sts` 10x+ inside the long-lived process). Earlier
+  speedups: `process.clean` 101 s -> 5 s/day; `process.tracks` 19 min -> ~3 min;
+  `process.identity` materialize-once (**still uncommitted, with `process/tracks.py`**; unit tests
+  pass, not yet compared on a real window -- do that).
+- **Open issue 2: unexplained deaths.** `prefetch_2024-07` died at 13:28 (no traceback, no
+  Windows crash or low-memory event); the 11:36 build died at ~11:41 together with a local relay,
+  and the web session confirms it did not kill them. Cause unknown.
+- **How to relaunch** (after a shutdown or death): validate the last written day with DuckDB and
+  delete a truncated partition (only days written before commit 136adb3 can be truncated), then
+  PowerShell `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments
+  @{CommandLine = '"C:/Program Files/Git/bin/bash.exe" scripts/build_archive_windows.sh';
+  CurrentDirectory = '<repo root>'}`. Every step is idempotent. Never `Start-Process` from a
+  Claude session: Windows kills it when the session exits.
+- **Rules while it runs:** never start a second build over `data/`; never kill `python`/`bash` by
+  name, only by PID; do not edit `scripts/build_archive_windows.sh` (bash reads it as it runs);
+  other work may read `data/` via DuckDB (~4 threads), not write there. Do not prune clean data
+  (`features.static` and P4-3h need it). ~213 GB free at close, enough.
 
 ## Next up
 
-1. **When P4-3b ends:** re-run the script for April, then `python -m features.static --start
-   <s> --end <e>` for every window (it writes `data/processed/static/window=.../`).
+0. **First, on the running build:** check July's per-step times in
+   `outputs/logs/window_2024-07-01.log` (expected ~45-60 min per full window now), and compare
+   `process.identity`'s new version against an existing window's `mmsi_imo` partition.
+1. **When P4-3b ends:** re-run the script once (April and May WILL show FAIL, see above), then `python -m
+   features.static --start <s> --end <e>` for every window (it writes
+   `data/processed/static/window=.../`).
 2. **Walk-forward (rest of P4-3b):** extend `model.lightgbm_risk` to every monthly cutoff,
    scored through `model.pooled_evaluation` (the frozen P4-3e protocol). Variants: R2, P4-3's
    pre-registered ones, and the frozen P4-3c `static` variant (logistic regression, plus LightGBM
@@ -490,7 +455,9 @@ design, not model architecture.
   `features.panel` now does. The stray `data/tracks/voyages/window=2024-06-10_2024-06-11` (P3-4/A4
   validation window) sits in every window-partitioned tree; harmless to exact-partition readers.
 
-- **`detect/sts.py`'s November run took 76 min, 4x the June baseline (17.6 min), with a ~62-minute
+- **RESOLVED 2026-09-28 (not sts's own code: the Windows heap lock inside the long-lived
+  `pipeline.window` process; a fresh process needs ~5 min -- see `docs/DECISIONS.md`).**
+  **`detect/sts.py`'s November run took 76 min, 4x the June baseline (17.6 min), with a ~62-minute
   gap where nothing is logged before its named stages (`slots`, `pair_slots`, `episodes`, `gated`,
   `scored`) begin.** Observed 2026-09-25 during P4-1b's real run, right after `on_land` was
   parallelized and ran faster than ever -- so this isn't the same class of fix. Not investigated:
