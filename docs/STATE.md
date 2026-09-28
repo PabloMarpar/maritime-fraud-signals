@@ -367,6 +367,9 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
   **April and May are marked FAIL on purpose**: both were stopped by PID (17:36 and 19:40) because
   they ran the old slow code; the script skips a failed window and goes on. June verified in 51 s;
   July started 19:40 with all three fixes below.
+- **The April/May rerun is already scheduled:** a waiter (powershell PID 23428, launched via WMI
+  19:45) runs `Wait-Process -Id 30940`, logs `START rerun_after_30940` to the status file, then
+  runs the script once more. Cancel it by killing PID 23428 (by PID only).
 - **All downloads are done:** `prefetch2_winter` OK 17:08, `prefetch2_summer` OK 19:38. Every day
   2024-03-02..2025-02-26 (362) is clean on disk.
 - **Three speed fixes this session** (`docs/DECISIONS.md` 2026-09-28, commits 83da129, d646e1c,
@@ -396,7 +399,7 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
 0. **First, on the running build:** check July's per-step times in
    `outputs/logs/window_2024-07-01.log` (expected ~45-60 min per full window now), and compare
    `process.identity`'s new version against an existing window's `mmsi_imo` partition.
-1. **When P4-3b ends:** re-run the script once (April and May WILL show FAIL, see above), then `python -m
+1. **When P4-3b ends (both runs -- the rerun is scheduled, see above):** check no window still shows FAIL, then `python -m
    features.static --start <s> --end <e>` for every window (it writes
    `data/processed/static/window=.../`).
 2. **Walk-forward (rest of P4-3b):** extend `model.lightgbm_risk` to every monthly cutoff,
