@@ -13,6 +13,7 @@ ever recorded when every artifact checks out. Nothing here touches data/ or the 
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -260,3 +261,24 @@ def test_dry_run_touches_nothing(tmp_path, monkeypatch):
     assert calls == {}
     assert not (tmp_path / "manifest.json").exists()
     assert not (tmp_path / "clean").exists()
+
+
+def test_isolated_step_runner_uses_a_fresh_process_and_returns_its_result():
+    run = window._make_step_runner(isolate=True)
+
+    assert run(os.getpid) != os.getpid()
+    assert run(divmod, 7, 2) == (3, 1)
+    assert run(int, "ff", base=16) == 255
+
+
+def test_isolated_step_runner_propagates_the_child_exception():
+    run = window._make_step_runner(isolate=True)
+
+    with pytest.raises(ValueError):
+        run(int, "not a number")
+
+
+def test_in_process_step_runner_calls_directly():
+    run = window._make_step_runner(isolate=False)
+
+    assert run(os.getpid) == os.getpid()

@@ -44,12 +44,22 @@ without monkeypatching a dozen module-level constants, and it is also what a fut
 **A failed verification raises and writes nothing to the manifest.** There is no partial-credit
 path: either every artifact for the window passed every gate, or none of the window's days become
 eligible for :mod:`pipeline.prune` to consider.
+
+**From the CLI, every producer runs in its own fresh process (2026-09-28).** On Windows, DuckDB
+allocates from the process heap (no jemalloc there), and after hours of heavy queries in one
+process its allocations serialize on the heap lock: April 2024's ``check_on_land`` ran at ~1.7 of
+16 cores for over 3 hours (py-spy: the worker waiting in ``RtlAllocateHeap``), and November's
+``detect.sts`` took 76 min where a fresh process needs ~5. :func:`process_window` itself defaults
+to in-process calls (``isolate_steps=False``) so tests can monkeypatch the producers; ``main()``
+turns isolation on unless ``--in-process`` is passed.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
+import multiprocessing
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -66,6 +76,29 @@ logger = logging.getLogger(__name__)
 DATA_ROOT = Path("data")
 DEFAULT_LEAD_IN_DAYS = liveness.BASELINE_DAYS  # 30 -- matches detect.liveness's own baseline window
 DEFAULT_THIN_MINUTES = thin.DEFAULT_INTERVAL_MINUTES
+LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+
+
+def _init_step_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+
+def _make_step_runner(isolate: bool):
+    """Return ``run(fn, *args, **kwargs)``: a direct call, or -- with ``isolate`` -- the same call
+    in a freshly spawned process that exits afterwards, so no step inherits an earlier step's heap.
+    The child's return value and any exception it raises come back to the caller unchanged."""
+    if not isolate:
+        return lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+    def run(fn, *args, **kwargs):
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_init_step_logging,
+        ) as pool:
+            return pool.submit(fn, *args, **kwargs).result()
+
+    return run
 
 
 def _now_iso() -> str:
@@ -226,10 +259,11 @@ def process_window(
     thin_minutes: int = DEFAULT_THIN_MINUTES,
     force: bool = False,
     dry_run: bool = False,
+    isolate_steps: bool = False,
 ) -> None:
     """Build every artifact for one sampled window, verify all of them, then record per-day
     fingerprints and ``verified_at`` -- and nothing else. See module docstring for the full order
-    and the safety posture (creates only, never deletes).
+    and the safety posture (creates only, never deletes), and for ``isolate_steps``.
 
     ``dry_run=True`` logs the plan and returns without touching disk at all -- unlike
     ``pipeline.backfill``'s own dry-run, which still runs the disk guard, this stops before any
@@ -253,15 +287,20 @@ def process_window(
         )
         return
 
-    backfill.backfill_range(
-        lead_in_start, end, data_root=data_root, min_free_gb=min_free_gb, force=force
+    run = _make_step_runner(isolate_steps)
+
+    run(
+        backfill.backfill_range,
+        lead_in_start, end, data_root=data_root, min_free_gb=min_free_gb, force=force,
     )
 
-    liveness_paths = liveness.build_liveness(
-        lead_in_start, end, in_root=roots["clean"], out_root=roots["liveness"], force=force
+    liveness_paths = run(
+        liveness.build_liveness,
+        lead_in_start, end, in_root=roots["clean"], out_root=roots["liveness"], force=force,
     )
 
-    thin_paths = thin.build_thin_tracks(
+    thin_paths = run(
+        thin.build_thin_tracks,
         start,
         end,
         in_root=roots["clean"],
@@ -269,17 +308,21 @@ def process_window(
         interval_minutes=thin_minutes,
         force=force,
     )
-    ship_type_path = ship_type.build_ship_type_reference(
-        start, end, in_root=roots["clean"], out_root=roots["ship_type"], force=force
+    ship_type_path = run(
+        ship_type.build_ship_type_reference,
+        start, end, in_root=roots["clean"], out_root=roots["ship_type"], force=force,
     )
-    voyages_path = tracks.reconstruct_range(
-        start, end, in_root=roots["clean"], out_root=roots["voyages"], force=force
+    voyages_path = run(
+        tracks.reconstruct_range,
+        start, end, in_root=roots["clean"], out_root=roots["voyages"], force=force,
     )
-    identity_path = identity.resolve_range(
-        start, end, in_root=roots["clean"], out_root=roots["identity"], force=force
+    identity_path = run(
+        identity.resolve_range,
+        start, end, in_root=roots["clean"], out_root=roots["identity"], force=force,
     )
 
-    anchorages_path = anchorages.build_anchorages(
+    anchorages_path = run(
+        anchorages.build_anchorages,
         start,
         end,
         in_root=roots["clean"],
@@ -287,7 +330,8 @@ def process_window(
         out_root=roots["anchorages"],
         force=force,
     )
-    spoofing_path = spoofing.build_spoofing_events(
+    spoofing_path = run(
+        spoofing.build_spoofing_events,
         start,
         end,
         in_root=roots["clean"],
@@ -296,7 +340,8 @@ def process_window(
         out_root=roots["spoofing"],
         force=force,
     )
-    sts_path = sts.build_sts_events(
+    sts_path = run(
+        sts.build_sts_events,
         start,
         end,
         in_root=roots["clean"],
@@ -304,7 +349,8 @@ def process_window(
         out_root=roots["sts"],
         force=force,
     )
-    behaviour_path = behaviour.build_behaviour_events(
+    behaviour_path = run(
+        behaviour.build_behaviour_events,
         start,
         end,
         in_root=roots["clean"],
@@ -315,7 +361,8 @@ def process_window(
         out_root=roots["behaviour"],
         force=force,
     )
-    identity_anomalies_path = identity_anomalies.build_identity_events(
+    identity_anomalies_path = run(
+        identity_anomalies.build_identity_events,
         start,
         end,
         in_root=roots["clean"],
@@ -399,13 +446,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dry-run", action="store_true", help="Log the plan without touching disk"
     )
     parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help="Run every producer in this process instead of a fresh process per step",
+    )
+    parser.add_argument(
         "--data-root", default=str(DATA_ROOT), help="Root directory for all data (default: data)"
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = _parse_args(argv)
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end) if args.end else start
@@ -418,6 +470,7 @@ def main(argv: list[str] | None = None) -> None:
         thin_minutes=args.thin_minutes,
         force=args.force,
         dry_run=args.dry_run,
+        isolate_steps=not args.in_process,
     )
 
 
