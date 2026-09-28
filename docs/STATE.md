@@ -330,18 +330,30 @@ _Last updated: 2026-09-28_
   author's call). Its top-ranked next steps are now tasks P4-3g (discrete-time hazard model)
   and P4-3h (implied Russian loading from draught).
 
-- **P5 web front end started, 2026-09-27: ahead of order at the author's request, with
-  prediction frozen on the site (author's call).** `report/export_viz.py` (read-only on `data/`)
-  exports every built window to `viz/public/data/` (gitignored). June + November give 24,133
-  indexed vessels and 9,145 dossiers, ~5 MB per window plus 28 MB of dossiers, ~3 min at 4
-  threads. `viz/` is an Astro 7 + Svelte 5 + deck.gl + MapLibre 5 site, bilingual (`/en/`,
-  `/es/`), with six pages: front-page story (the NS LOTUS case), explorer (animated month, event
-  layers, timeline, vessel panel), vessel search, dossiers, live, and about.
-  `ingest/aisstream.py` relays AISStream to the live page but has **not been run against the
-  real service yet (no key)**. 24 new Python tests (export + relay), `ruff` clean, `astro check`
-  0 errors. Node 24 is portable in `%LOCALAPPDATA%\Programs\nodejs`. Run with
-  `cd viz && npm run dev`, then open http://127.0.0.1:4321/. Full detail in
-  `docs/DECISIONS.md`, 2026-09-27 "P5".
+- **P5 web: PUBLIC at https://checkgraph.dev since 2026-09-28** (built ahead of order at the
+  author's request; prediction frozen on the site). Details in `docs/DECISIONS.md` (2026-09-27
+  "P5", 2026-09-28 "P5-3", "P5-7", "P5-9") and the README's "Web map" section.
+  - **Export:** `report/export_viz.py` (read-only on `data/`) writes `viz/public/data/`
+    (git-ignored). This includes `shadow.json`; `--shadow-only` rebuilds it from the dossiers.
+  - **Site:** `viz/` is Astro 7 + Svelte 5 + deck.gl + MapLibre 5, bilingual. It has seven pages:
+    story (NS LOTUS), shadow fleet, explorer, live, vessel search, dossiers, about. It also has a
+    404 page, canonical/Open Graph tags and 1200x630 share cards from `viz/scripts/og-images.mjs`
+    (`public/og/`, git-ignored).
+  - **Hosting:** the author's Cloudflare account (245e8f47...), Workers Free plan.
+    - The site is an assets-only Worker (`viz/wrangler.jsonc`, `checkgraph-site`) on
+      checkgraph.dev and www.
+    - The live relay is `relay/` (Worker + Durable Object, `maritime-live-relay`) on
+      live.checkgraph.dev. The AISStream key is a Worker secret; it accepts only the site's
+      origins and connects upstream only while someone watches. It is a TypeScript port of
+      `ingest/aisstream.py` (which still serves local work on `ws://127.0.0.1:8765`).
+  - **Credentials:** the wrangler OAuth login is in `%APPDATA%\xdg.config\.wrangler` and has no
+    DNS or Web Analytics permission. The key is in the git-ignored `.env` and
+    `relay/.dev.vars`; it was checked absent from every pushed commit.
+  - **Rollback:** the old Netlify DNS records were apex A 75.2.60.5 and `www` CNAME
+    `fake-review-detector-s.netlify.app`. The author deleted them by hand; the Netlify site
+    still exists.
+  - **Tooling:** Node 24 is portable in `%LOCALAPPDATA%\Programs\nodejs`. Commits are pushed to
+    `origin` (GitHub, PabloMarpar/maritime-fraud-signals).
 
 ## In progress
 
@@ -367,6 +379,12 @@ so an old `Traceback` in a log does not mean the current run failed).
   stop only the PID you started.** The build's processes are `pipeline.window`,
   `pipeline.backfill`, `detect.gaps`, `features.panel` under a `bash.exe` whose parent is
   `WmiPrvSE`.
+  - *Note from the web session:* it never stopped `python` or `bash` processes by name. It only
+    stopped node/workerd processes by PID, or by a `wrangler`/`workerd` command line, at ~11:22
+    and ~13:05. It was idle around 11:41. Its own relay (`python -m ingest.aisstream`, started
+    11:19 as a Claude Code background task) had also died by 12:30 without being stopped. So both
+    probably died from one common cause, still unknown. The public relay now runs on Cloudflare,
+    so no local relay needs to run next to the build.
 - **Why it died on 2026-09-28 (~09:00-11:00) with no error:** the machine did NOT reboot. It had
   been started with `Start-Process` from a Claude Code session, and Windows kills a session's child
   processes when the session exits (job object). **Always launch it via WMI**, which parents it to
@@ -406,43 +424,24 @@ so an old `Traceback` in a log does not mean the current run failed).
    post-designation rows hurt. Pre-register it before running.
 4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
    Thresholds are fixed on March 2024 only; validate against GFW port visits.
-5. **Web (P5): the site is PUBLIC at https://checkgraph.dev (2026-09-28).** It is on the author's
-   Cloudflare account (245e8f47...). Everything uses the Workers Free plan, so no card and no bills.
-   - **Site:** `viz/wrangler.jsonc`, an assets-only Worker (`checkgraph-site`) serving `viz/dist`
-     on `checkgraph.dev` and `www`. Republish with `cd viz`, `npx astro build`, then
-     `../relay/node_modules/.bin/wrangler deploy`.
-   - **Live relay:** `relay/` (`maritime-live-relay`) on `live.checkgraph.dev`. It holds the
-     AISStream key as a Worker secret, answers `/health`, and only lets checkgraph.dev pages
-     connect. Measured from outside: ~21 msg/s. Republish with `cd relay` and
-     `npx wrangler deploy`.
-   - **Wrangler login:** OAuth, stored in `%APPDATA%\xdg.config\.wrangler`. It has no DNS
-     permission.
-   - **DNS switch:** the author deleted the old Netlify records by hand; they were apex A
-     75.2.60.5 and `www` CNAME `fake-review-detector-s.netlify.app`. Recreate them to roll back.
-     The old Netlify site itself still exists, untouched.
-   - **Next:**
-     - After the archive build, run `python -m report.export_viz` and republish the site.
-     - Watch the free limit of 20,000 files per deployment. Today there are 9,353, of which
-       9,145 are dossiers; bundle the dossiers into shards before more windows push it past
-       the limit.
-     - After a day of real use, check the relay's free-plan usage in the Cloudflare dashboard.
+5. **Web (P5), in parallel. The site is live; what is left:**
+   - **P5-10, waiting for the author:** the author adds checkgraph.dev under Cloudflare Web
+     Analytics and passes the public token. Put it in `viz/.env.production` as
+     `PUBLIC_CF_BEACON`, rebuild, redeploy, and add a no-cookie line to the about page.
+   - **After the archive build:**
+     1. Run `python -m report.export_viz`.
+     2. Regenerate the share cards (`og-images.mjs`, needs `npx astro preview` running).
+     3. Rebuild the site.
+     4. Redeploy: `cd viz`, then `../relay/node_modules/.bin/wrangler deploy`.
+
+     The shadow-fleet figures and texts follow the new months by themselves.
+   - **P5-8:** after a day of traffic, check the relay's free-plan usage. Before re-exports
+     approach 20,000 files per deployment, shard the dossiers: today there are 9,353 files, of
+     which 9,145 are dossiers.
    - **Local viewing:** the dev server can time out while the archive build loads the machine.
      Use `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
-     local relay; a plain build targets the public relay.
-   - Earlier today: the relay was run against real AISStream (P5-6: ~25 msg/s, 3,210 vessels in
-     10 min). Basemap land is lighter (#1c2839).
-   - **Shadow-fleet page (P5-9, live 2026-09-28)** at `/[lang]/shadow-fleet/`, built from
-     `shadow.json` (`report.export_viz.shadow_fleet`; `--shadow-only` rebuilds it from the
-     dossiers). On June + November 2024: 260 sanctioned vessels (by IMO) seen, 231 (89%) before
-     their first designation (median ~7 months), 22 changed flag. Regimes: Russia 229, Iran 28,
-     other 3. The EU financial-sanctions file holds only 2 vessels; the page says so.
-   - **Share cards (P5-9):** `viz/scripts/og-images.mjs` renders 1200x630 JPEGs (story, shadow,
-     generic, per language) from a running preview into `public/og/` (git-ignored). Re-run it
-     after a re-export, then rebuild.
-   - **Visitor stats (P5-10, waits for the author):** the wrangler login cannot create Web
-     Analytics sites. The author adds checkgraph.dev under Web Analytics in the dashboard and
-     passes the public token; it goes in `viz/.env.production` as `PUBLIC_CF_BEACON`, and
-     `Base.astro` then loads the no-cookie beacon.
+     local relay (`python -m ingest.aisstream`, or `npx wrangler dev --port 8765` in `relay/`).
+     A plain build targets the public relay.
 6. Then P4-4 (calibration). Challengers from the research report:
    - TabPFN v2 / TabICL (licence-clean);
    - bagging PU (averaging models trained on resampled vessels whose label is unknown);

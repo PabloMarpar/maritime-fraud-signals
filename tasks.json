@@ -58,7 +58,7 @@
     { "id": "P5-9", "phase": 5, "done": true, "description": "Shadow-fleet page (/[lang]/shadow-fleet/: routes map, headline figures, designation timeline, flags, regimes, lists, searchable table) from shadow.json, plus share-card images (scripts/og-images.mjs) and Open Graph/Twitter tags. Done 2026-09-28" },
     { "id": "P5-10", "phase": 5, "done": false, "description": "Visitor stats: the author adds checkgraph.dev to Cloudflare Web Analytics and passes the public token; put it in viz/.env.production as PUBLIC_CF_BEACON, rebuild, redeploy, and mention the no-cookie counting on the about page" },
 
-    { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled. Relay (ingest/aisstream.py, Danish straits + Gibraltar, compression on) and live page built 2026-09-27; not yet run against AISStream (needs AISSTREAM_API_KEY in .env); no capture to disk yet" },
+    { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled. Relays (ingest/aisstream.py locally, relay/ on live.checkgraph.dev) run against AISStream since 2026-09-28 with compression; Gibraltar coverage in AISStream is sparse (89 vessels vs 3,121 Danish in the first 10 min), which matters for this phase. No capture to disk yet" },
     { "id": "P6-2", "phase": 6, "done": false, "description": "Scheduled ingestion via GitHub Actions" },
     { "id": "P6-3", "phase": 6, "done": false, "description": "Reproduce a known case: score a sanctioned vessel on its pre-designation history" },
     { "id": "P6-4", "phase": 6, "done": false, "description": "Final README and second analyst-review pass" }
