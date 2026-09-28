@@ -1,0 +1,18 @@
+// Cloudflare Worker config for the live AIS relay (see src/index.ts).
+// Deploy: npx wrangler login (once), npx wrangler secret put AISSTREAM_API_KEY, npx wrangler deploy.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "maritime-live-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "LiveRelay" }]
+  },
+  // The Workers Free plan only offers SQLite-backed Durable Objects; this one stores nothing.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveRelay"] }],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://checkgraph.dev,https://www.checkgraph.dev"
+  },
+  "routes": [{ "pattern": "live.checkgraph.dev", "custom_domain": true }],
+  "observability": { "enabled": true }
+}

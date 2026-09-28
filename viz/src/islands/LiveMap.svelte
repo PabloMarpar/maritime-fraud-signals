@@ -14,6 +14,9 @@
   const tr = $derived(useT(lang));
 
   const RELAY_URL: string = import.meta.env.PUBLIC_LIVE_URL ?? 'ws://127.0.0.1:8765';
+  // A relay on this machine (ingest/aisstream.py or `wrangler dev`) gets the developer's
+  // instructions when it is down; the public relay gets a visitor-facing message.
+  const LOCAL_RELAY = /^ws:\/\/(127\.0\.0\.1|localhost)[:/]/.test(RELAY_URL);
   const HISTORY_S = 60 * 60; // trail length
   const EXTRAPOLATE_MAX_S = 180;
 
@@ -405,13 +408,19 @@
   {#if status === 'offline'}
     <div class="offline glass">
       <div class="eyebrow">{tr('live.status.offline')}</div>
-      <h2>{tr('live.offline.title')}</h2>
-      <p>{tr('live.offline.body')}</p>
-      <ol>
-        <li>{tr('live.offline.step1')}</li>
-        <li>{tr('live.offline.step2')} <code>python -m ingest.aisstream</code></li>
-      </ol>
-      <p class="relay mono">{RELAY_URL}</p>
+      {#if LOCAL_RELAY}
+        <h2>{tr('live.offline.title')}</h2>
+        <p>{tr('live.offline.body')}</p>
+        <ol>
+          <li>{tr('live.offline.step1')}</li>
+          <li>{tr('live.offline.step2')} <code>python -m ingest.aisstream</code></li>
+        </ol>
+        <p class="relay mono">{RELAY_URL}</p>
+      {:else}
+        <h2>{tr('live.offline.publicTitle')}</h2>
+        <p>{tr('live.offline.publicBody')}</p>
+        <a class="btn" href={localePath(lang, 'explore/')}>{tr('story.explore')} →</a>
+      {/if}
     </div>
   {/if}
 

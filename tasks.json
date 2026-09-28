@@ -53,6 +53,7 @@
     { "id": "P5-4", "phase": 5, "done": false, "description": "Vessel dossier generator with explicit confidence levels. Dossier pages exist (viz /vessel/?mmsi=); confidence levels wait for a model that beats R2, prediction is frozen on the site by the author (2026-09-27)" },
     { "id": "P5-5", "phase": 5, "done": true, "description": "Front-page story (NS LOTUS case), vessel search and about page, bilingual EN/ES. Done 2026-09-27" },
     { "id": "P5-6", "phase": 5, "done": true, "description": "Run the live relay against real AISStream. Done 2026-09-28: ~25 msg/s, 3,210 vessels after ~10 min (Gibraltar sparse, 89), static reports fill in over ~6 min; page fine at 3,000+ vessels. A public relay host (wss) is still open, see P5-3" },
+    { "id": "P5-7", "phase": 5, "done": false, "description": "Deploy the live relay (relay/, Cloudflare Worker + Durable Object, Workers Free plan) at live.checkgraph.dev: wrangler login, secret put AISSTREAM_API_KEY, deploy; then check /health, the free-plan usage after a day, and the live page from checkgraph.dev. Built and tested locally 2026-09-28; waits for the author's go-ahead" },
 
     { "id": "P6-1", "phase": 6, "done": false, "description": "Live AISStream capture for Gibraltar/Ceuta, with compression enabled. Relay (ingest/aisstream.py, Danish straits + Gibraltar, compression on) and live page built 2026-09-27; not yet run against AISStream (needs AISSTREAM_API_KEY in .env); no capture to disk yet" },
     { "id": "P6-2", "phase": 6, "done": false, "description": "Scheduled ingestion via GitHub Actions" },

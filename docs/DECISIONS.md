@@ -1797,3 +1797,31 @@ _2026-09-28_ (P4-3b archive build: two operational fixes)
 - **Long builds are launched through WMI, not `Start-Process`.** A process started from a Claude
   Code session is killed when the session exits (Windows job object); that, not a reboot, is what
   stopped the build on 2026-09-28. `Win32_Process.Create` parents it to `WmiPrvSE`, outside the job.
+
+_2026-09-28_ (P5-7: the public live relay is a free Cloudflare Worker, not a server or the browser)
+
+- **No direct browser connections to AISStream.** The author asked whether each visitor's browser
+  could call AISStream itself, to avoid paying for a server. AISStream's documentation forbids it
+  ("Direct browser connections are not permitted. Connect from your own server and proxy only the
+  information each client needs"). It also caps an account at 3 subscribed connections, so a
+  fourth visitor would break it, and the key would be public in the page.
+- **No paid server (author's call).** The relay for the public site is `relay/`: a Cloudflare
+  Worker plus one Durable Object that holds a single upstream connection shared by every viewer,
+  on the Workers Free plan. No card is needed; past a limit it stops for the day and never
+  bills. The domain's DNS is already on Cloudflare.
+- **Staying inside the free limits.** The free plan gives 100,000 requests and 13,000 GB-s of
+  Durable Object duration per day. One object awake all day is ~10,800 GB-s. The docs do not say
+  whether messages arriving on an outbound WebSocket count as requests; if they count at the
+  inbound 20:1 ratio, a 24 h connection is ~108,000. So the upstream opens with the first viewer
+  and closes 5 min after the last, and only `ALLOWED_ORIGINS` (the site's own domain) may connect.
+- **One protocol, two relays.** The Worker is a TypeScript port of `ingest/aisstream.py` with the
+  same browser protocol. `relay/test/ais.test.ts` mirrors `tests/test_aisstream.py`, and
+  `tests/test_relay_tables.py` checks its MID-to-flag JSON (regenerate with
+  `python -m report.countries`). `new WebSocket()` in a Worker negotiates permessage-deflate by
+  itself, which AISStream needs for full rate. Frames arrive binary, so `binaryType` is set to
+  `arraybuffer`.
+- **Visitor-facing offline card.** The page shows the developer instructions (key, Python
+  command) only when its relay URL is on localhost. The public build shows "unavailable right
+  now, reconnecting" with a link to the explorer.
+- **Basemap land #0d1624 → #1c2839.** The author could not tell land from sea. The sea is
+  unchanged, so tracks and density read as before.

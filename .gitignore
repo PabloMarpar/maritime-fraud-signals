@@ -40,3 +40,6 @@ viz/dist/
 viz/.astro/
 viz/public/data/
 viz/shots/
+relay/node_modules/
+relay/.wrangler/
+relay/.dev.vars

@@ -394,11 +394,20 @@ so an old `Traceback` in a log does not mean the current run failed).
      AISStream. After ~10 min: 3,210 vessels (3,121 Danish straits, 89 Gibraltar, which is sparse
      in AISStream), ~25 msg/s, 713 with a destination, 449 with an IMO (static reports arrive
      every ~6 min). The page handled 3,000+ vessels with no errors. It already showed a listed
-     tanker live: CELT (ex-CALLISTO, IMO 9299692, UK 2024-10-17, OFAC 2025-01-10). Locally it
-     works only while `python -m ingest.aisstream` runs. A public site needs the relay on an
-     always-on machine with `wss://` (e.g. `live.checkgraph.dev`); not chosen yet. The dev server
-     can time out while the archive build loads the machine: use `npx astro build` +
-     `npx astro preview` instead.
+     tanker live: CELT (ex-CALLISTO, IMO 9299692, UK 2024-10-17, OFAC 2025-01-10).
+   - **Public live relay (P5-7), built and tested locally 2026-09-28, NOT deployed.** The author
+     refused a paid server, and AISStream forbids browser connections (max 3 per account). So
+     `relay/` is a Cloudflare Worker with one Durable Object holding one shared upstream
+     connection, on the Workers Free plan; it is a TypeScript port of `ingest/aisstream.py` with
+     the same protocol. Under `wrangler dev` it gave ~20 msg/s, and the live page worked through
+     it. To deploy (author's go-ahead and Cloudflare login needed): `cd relay`,
+     `npx wrangler login`, `npx wrangler secret put AISSTREAM_API_KEY`, `npx wrangler deploy`
+     (custom domain `live.checkgraph.dev`). Harmless: `wrangler dev` logs "Network connection
+     lost" when a viewer disconnects; the relay keeps its state.
+   - Basemap land is lighter (#1c2839, author's feedback that land and sea looked alike).
+   - The dev server can time out while the archive build loads the machine. Use
+     `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` instead (a
+     plain build targets the public relay).
    - **Publishing (P5-3):** the domain is **checkgraph.dev**, retired from the author's
      `fake-review-detector` project. Its DNS is on Cloudflare (norman/jocelyn.ns.cloudflare.com).
      Today the apex A record (75.2.60.5) and `www` (CNAME to `fake-review-detector-s.netlify.app`)

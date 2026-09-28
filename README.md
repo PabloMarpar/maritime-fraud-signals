@@ -59,6 +59,24 @@ cd viz && npm install && npm run dev   # then open http://127.0.0.1:4321/
 python -m ingest.aisstream             # optional: live relay for /live/ (AISSTREAM_API_KEY in .env)
 ```
 
+The live page never talks to AISStream directly: AISStream forbids browser connections and allows
+three connections per account, so a relay holds the key and one shared upstream connection. Two
+relays speak the same protocol to the page:
+
+- `ingest/aisstream.py`, which runs on this machine at `ws://127.0.0.1:8765`;
+- `relay/`, a Cloudflare Worker for the public site (`wss://live.checkgraph.dev`, set in
+  `viz/.env.production`). It runs on the Workers Free plan. It only connects to AISStream while
+  somebody is watching, and only pages from the site's own domain may connect to it.
+
+```bash
+cd relay && npm install && npm test                            # parsing tests, mirrors tests/test_aisstream.py
+npx wrangler dev --port 8765                                   # run it locally; key in relay/.dev.vars
+npx wrangler login && npx wrangler secret put AISSTREAM_API_KEY && npx wrangler deploy   # publish
+```
+
+A production build points the live page at the public relay. To view a local build against a
+local relay, run `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build`, then `npx astro preview`.
+
 The site shows measured facts only: tracks, detector events, identity and sanctions
 designations. It publishes no risk scores until a model beats the baseline rule.
 

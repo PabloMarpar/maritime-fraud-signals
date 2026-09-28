@@ -174,6 +174,9 @@ const en = {
     'Live positions come from AISStream through a small relay that keeps the API key private. Start it on this computer and this page connects automatically.',
   'live.offline.step1': 'Add AISSTREAM_API_KEY=… to the project’s .env file',
   'live.offline.step2': 'Run',
+  'live.offline.publicTitle': 'The live feed is unavailable right now',
+  'live.offline.publicBody':
+    'This page reconnects on its own as soon as the relay is back. Meanwhile, you can replay a whole month of traffic in the explorer.',
   'live.vessels': '{n} vessels',
   'live.updated': 'Updated {s} s ago',
   'live.speed': 'Speed',
@@ -402,6 +405,9 @@ const es: Record<UIKey, string> = {
     'Las posiciones en directo llegan de AISStream a través de un pequeño relé que mantiene privada la clave de la API. Arráncalo en este ordenador y esta página se conectará sola.',
   'live.offline.step1': 'Añade AISSTREAM_API_KEY=… al archivo .env del proyecto',
   'live.offline.step2': 'Ejecuta',
+  'live.offline.publicTitle': 'El directo no está disponible ahora mismo',
+  'live.offline.publicBody':
+    'La página se reconecta sola en cuanto el relé vuelva. Mientras tanto, puedes reproducir un mes entero de tráfico en el explorador.',
   'live.vessels': '{n} buques',
   'live.updated': 'Actualizado hace {s} s',
   'live.speed': 'Velocidad',

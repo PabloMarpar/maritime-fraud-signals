@@ -1,0 +1,22 @@
+{
+  "name": "maritime-live-relay",
+  "private": true,
+  "type": "module",
+  "description": "AISStream -> browsers relay for the site's live page, as a Cloudflare Worker + Durable Object",
+  "scripts": {
+    "dev": "wrangler dev --port 8765",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260928.1",
+    "@types/node": "^24.19.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.142.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260926.1": true
+  }
+}

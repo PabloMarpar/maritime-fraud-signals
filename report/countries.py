@@ -12,6 +12,9 @@ never change a detector, feature or label.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 COUNTRY_ISO2: dict[str, str] = {
     "Afghanistan": "AF",
     "Alaska": "US",
@@ -255,3 +258,21 @@ def iso2_of(country: str | None) -> str | None:
     if country is None:
         return None
     return COUNTRY_ISO2.get(country)
+
+
+RELAY_MID_TABLE = Path(__file__).resolve().parents[1] / "relay" / "src" / "mid_iso2.json"
+
+
+def mid_iso2_table() -> dict[str, str | None]:
+    """MID -> ISO alpha-2, as the Worker relay (``relay/``) carries it."""
+    from process.mid import MID_COUNTRY
+
+    return {str(mid): iso2_of(country) for mid, country in sorted(MID_COUNTRY.items())}
+
+
+if __name__ == "__main__":
+    # Regenerate the Worker relay's copy: python -m report.countries
+    with RELAY_MID_TABLE.open("w", encoding="utf-8", newline="\n") as f:
+        json.dump(mid_iso2_table(), f, separators=(",", ":"))
+        f.write("\n")
+    print(f"Wrote {RELAY_MID_TABLE}")
