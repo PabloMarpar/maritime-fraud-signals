@@ -19,6 +19,10 @@ to a handful of files the browser loads directly, under ``viz/public/data/``:
   per window.
 - ``sanctions.json`` -- every sanctioned IMO in the frozen label snapshot, so the live page can
   flag a sanctioned vessel it sees.
+- ``shadow.json`` -- one record per sanctioned vessel (by IMO) seen in any exported window, for
+  the shadow-fleet page: names and flags used, when it was seen, its designations and how long
+  after the first sighting they came (:func:`shadow_fleet`). Computed from the dossiers alone, so
+  ``--shadow-only`` rebuilds it without touching ``data/``.
 
 **Read-only on ``data/``.** Everything under ``data/`` is only read, through DuckDB, so this can
 run while ``scripts/build_archive_windows.sh`` writes new windows. Cap ``--threads`` then.
@@ -759,6 +763,139 @@ def export_window(con: duckdb.DuckDBPyConnection, w: Window, out_root: Path) -> 
 # --------------------------------------------------------------------------------------------
 
 
+# Sanctions regime from a designation's programme text: the site says how many listed vessels
+# are there over Russia and how many over Iran, rather than calling them all "Russian".
+REGIME_NEEDLES = (("russia", ("RUSSIA", "UKRAINE", "PEESA")), ("iran", ("IRAN",)))
+
+
+def sanction_regime(program: str | None) -> str:
+    """'russia', 'iran' or 'other' for a sanctions programme name (OFAC/UK/EU wording)."""
+    text = (program or "").upper()
+    for regime, needles in REGIME_NEEDLES:
+        if any(n in text for n in needles):
+            return regime
+    return "other"
+
+
+def _window_start(window_id: str) -> date:
+    return date.fromisoformat(window_id.split("_")[0])
+
+
+def shadow_fleet(dossiers: list[dict]) -> list[dict]:
+    """One record per sanctioned vessel seen, grouped by IMO across its mmsi (a new flag means a
+    new mmsi), from the per-mmsi dossiers ``_write_vessels`` writes.
+
+    A vessel counts when any of its mmsi carries a sanctions record (``dossier["sanctions"]``,
+    matched by IMO). ``first``/``last`` are the first and last day with any observed hour.
+    ``lead_days`` is the earliest designation minus the first sighting: positive when the vessel
+    was in Danish waters before it was sanctioned.
+    """
+    groups: dict[str, list[dict]] = {}
+    for d in dossiers:
+        if d.get("sanctions"):
+            groups.setdefault(d.get("imo") or f"mmsi:{d['mmsi']}", []).append(d)
+
+    out = []
+    for imo, members in groups.items():
+        days: set[date] = set()
+        hours_by_mmsi: dict[int, float] = {}
+        names: dict[str, int] = {}
+        dests: dict[str, int] = {}
+        flags: list[tuple[date, str]] = []
+        types: dict[str, int] = {}
+        windows: set[str] = set()
+        events = {"gaps": 0, "sts": 0, "draught": 0, "dest": 0, "spoof": 0}
+        designations: dict[tuple[str, str], str] = {}
+        for d in members:
+            m = d["mmsi"]
+            for source, _name, _flag, program, designated in d["sanctions"]:
+                if designated:
+                    key = (source, designated)
+                    # Several programmes per source and day: prefer a named regime over "other".
+                    if designations.get(key, "other") == "other":
+                        designations[key] = sanction_regime(program)
+            if d.get("ship_type"):
+                types[d["ship_type"]] = types.get(d["ship_type"], 0) + 1
+            first_seen_here: date | None = None
+            for wid, info in d.get("windows", {}).items():
+                start = _window_start(wid)
+                hours = info.get("hours_by_day") or []
+                seen = [date.fromordinal(start.toordinal() + i) for i, h in enumerate(hours) if h]
+                if not seen:
+                    continue
+                windows.add(wid)
+                days.update(seen)
+                hours_by_mmsi[m] = hours_by_mmsi.get(m, 0.0) + sum(hours)
+                earliest_here = min(seen)
+                if first_seen_here is None or earliest_here < first_seen_here:
+                    first_seen_here = earliest_here
+                for name, n, *_ in info.get("names") or []:
+                    names[name] = names.get(name, 0) + n
+                for dest, n, *_ in info.get("destinations") or []:
+                    dests[dest] = dests.get(dest, 0) + n
+                ev = info.get("events") or {}
+                events["gaps"] += ev.get("n_gaps", 0)
+                events["sts"] += len(ev.get("sts") or [])
+                for kind, *_ in ev.get("behav") or []:
+                    if kind == "draught_change_unexplained":
+                        events["draught"] += 1
+                    elif kind == "destination_course_mismatch":
+                        events["dest"] += 1
+                events["spoof"] += sum(
+                    n for k, n in (ev.get("spoof_counts") or {}).items() if k in SPOOF_KINDS
+                )
+            if first_seen_here is not None and d.get("iso2"):
+                flags.append((first_seen_here, d["iso2"]))
+        if not days:
+            continue
+        first, last = min(days), max(days)
+        dated = sorted((day, source, regime) for (source, day), regime in designations.items())
+        earliest = date.fromisoformat(dated[0][0]) if dated else None
+        by_hours = sorted(hours_by_mmsi, key=lambda m: -hours_by_mmsi[m])
+        ordered_flags: list[str] = []
+        for _, iso2 in sorted(flags):
+            if iso2 not in ordered_flags:
+                ordered_flags.append(iso2)
+        out.append({
+            "imo": None if imo.startswith("mmsi:") else imo,
+            "name": max(names, key=names.__getitem__) if names else None,
+            "names": sorted(names, key=lambda n: -names[n]),
+            "flags": ordered_flags,
+            "mmsi": by_hours,
+            "dossier": by_hours[0],
+            "type": max(types, key=types.__getitem__) if types else None,
+            "length": max((d.get("length") or 0 for d in members), default=0) or None,
+            "first": first.isoformat(),
+            "last": last.isoformat(),
+            "days": len(days),
+            "hours": round(sum(hours_by_mmsi.values()), 1),
+            "windows": sorted(windows),
+            "designations": [[source, day, regime] for day, source, regime in dated],
+            "designated": earliest.isoformat() if earliest else None,
+            "lead_days": (earliest - first).days if earliest else None,
+            "events": events,
+            "destinations": sorted(dests, key=lambda x: -dests[x])[:3],
+        })
+    out.sort(key=lambda r: (r["designated"] or "9999", r["name"] or ""))
+    return out
+
+
+def _write_shadow(dossiers: list[dict], out_root: Path, snapshot: str | None) -> int:
+    fleet = shadow_fleet(dossiers)
+    _write_json(out_root / "shadow.json", {"sanctions_snapshot": snapshot, "vessels": fleet})
+    return len(fleet)
+
+
+def write_shadow_from_export(out_root: Path = OUT_ROOT) -> int:
+    """Rebuild ``shadow.json`` from an existing export's dossiers, without reading ``data/``."""
+    dossiers = [json.loads(p.read_text(encoding="utf-8"))
+                for p in sorted((out_root / "vessels" / "d").glob("*.json"))]
+    meta = json.loads((out_root / "windows.json").read_text(encoding="utf-8"))
+    n = _write_shadow(dossiers, out_root, meta.get("sanctions_snapshot"))
+    logger.info("shadow.json: %d sanctioned vessels from %d dossiers", n, len(dossiers))
+    return n
+
+
 def _sanctions(con: duckdb.DuckDBPyConnection) -> tuple[dict[str, list], dict[int, list]]:
     """(by_imo, by_mmsi): every record of the frozen sanctions snapshot keyed by IMO, and the
     records matched to each AIS mmsi by process.sanctions_match."""
@@ -782,7 +919,9 @@ def _sanctions(con: duckdb.DuckDBPyConnection) -> tuple[dict[str, list], dict[in
     return by_imo, by_mmsi
 
 
-def _write_vessels(results: list[WindowResult], out_root: Path, by_mmsi: dict[int, list]) -> dict:
+def _write_vessels(
+    results: list[WindowResult], out_root: Path, by_mmsi: dict[int, list]
+) -> tuple[dict, list[dict]]:
     index: dict[int, list] = {}
     dossiers: dict[int, dict] = {}
     for bit, result in enumerate(results):
@@ -829,7 +968,7 @@ def _write_vessels(results: list[WindowResult], out_root: Path, by_mmsi: dict[in
             "rows": sorted(index.values(), key=lambda r: (r[1] is None, r[1] or "", r[0])),
         },
     )
-    return {"n_index": len(index), "n_dossiers": len(dossiers)}
+    return {"n_index": len(index), "n_dossiers": len(dossiers)}, list(dossiers.values())
 
 
 def export_all(
@@ -847,8 +986,9 @@ def export_all(
     finally:
         con.close()
 
-    vessels = _write_vessels(results, out_root, by_mmsi)
+    vessels, dossiers = _write_vessels(results, out_root, by_mmsi)
     _write_json(out_root / "sanctions.json", by_imo)
+    vessels["n_shadow"] = _write_shadow(dossiers, out_root, _iso(snapshot))
     meta = {
         "built_at": _iso(datetime.now(timezone.utc)),
         "git_sha": git_sha(),
@@ -873,6 +1013,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--out", default=str(OUT_ROOT), help="Output directory")
     parser.add_argument(
+        "--shadow-only", action="store_true",
+        help="Only rebuild shadow.json from an existing export (reads no data/)",
+    )
+    parser.add_argument(
         "--threads", type=int, default=4, help="Cap DuckDB threads (default 4, leaves CPU for "
         "a concurrent archive build)"
     )
@@ -882,6 +1026,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parse_args(argv)
+    if args.shadow_only:
+        write_shadow_from_export(Path(args.out))
+        return
     windows = discover_windows()
     if args.windows:
         wanted = set(args.windows)

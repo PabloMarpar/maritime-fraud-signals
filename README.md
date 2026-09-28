@@ -75,8 +75,13 @@ npx wrangler login && npx wrangler secret put AISSTREAM_API_KEY && npx wrangler 
 ```
 
 The site is published at **https://checkgraph.dev** as an assets-only Cloudflare Worker
-(`viz/wrangler.jsonc`). To republish after a re-export, run `cd viz && npx astro build`, then
-`../relay/node_modules/.bin/wrangler deploy`.
+(`viz/wrangler.jsonc`). To republish after a re-export:
+
+1. `cd viz && npx astro build`.
+2. Render the share cards: run `npx astro preview` in one terminal and
+   `node scripts/og-images.mjs` in another.
+3. Rebuild with `npx astro build`.
+4. Publish with `../relay/node_modules/.bin/wrangler deploy`.
 
 A production build points the live page at the public relay. To view a local build against a
 local relay, run `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build`, then `npx astro preview`.

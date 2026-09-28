@@ -43,3 +43,4 @@ viz/shots/
 relay/node_modules/
 relay/.wrangler/
 relay/.dev.vars
+viz/public/og/

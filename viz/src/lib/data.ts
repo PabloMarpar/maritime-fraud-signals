@@ -134,6 +134,34 @@ export interface VesselIndex {
 
 export type SanctionsByImo = Record<string, Designation[]>;
 
+/** One sanctioned vessel seen in the exported windows, grouped by IMO (report.export_viz.shadow_fleet). */
+export interface ShadowVessel {
+  imo: string | null;
+  name: string | null;
+  names: string[];
+  flags: string[];
+  mmsi: number[];
+  dossier: number;
+  type: string | null;
+  length: number | null;
+  first: string;
+  last: string;
+  days: number;
+  hours: number;
+  windows: string[];
+  /** [source, date, regime] */
+  designations: [string, string, 'russia' | 'iran' | 'other'][];
+  designated: string | null;
+  lead_days: number | null;
+  events: { gaps: number; sts: number; draught: number; dest: number; spoof: number };
+  destinations: string[];
+}
+
+export interface Shadow {
+  sanctions_snapshot: string | null;
+  vessels: ShadowVessel[];
+}
+
 export function dataUrl(path: string): string {
   return `${import.meta.env.BASE_URL.replace(/\/$/, '')}/data/${path}`;
 }
@@ -158,6 +186,7 @@ export const loadFleet = (w: string) => fetchJson<Fleet>(`w/${w}/fleet.json`);
 export const loadEvents = (w: string) => fetchJson<Events>(`w/${w}/events.json`);
 export const loadIndex = () => fetchJson<VesselIndex>('vessels/index.json');
 export const loadSanctions = () => fetchJson<SanctionsByImo>('sanctions.json');
+export const loadShadow = () => fetchJson<Shadow>('shadow.json');
 export const densityUrl = (w: string) => dataUrl(`w/${w}/density.webp`);
 
 export async function loadDossier(mmsi: number | string): Promise<Dossier | null> {

@@ -11,6 +11,6 @@ export function getStaticPaths() {
 const lang = Astro.params.lang as Lang;
 ---
 
-<Base lang={lang} path="" title={STORY[lang].heroTitle} description={STORY[lang].heroDek}>
+<Base lang={lang} path="" title={STORY[lang].heroTitle} description={STORY[lang].heroDek} og="story">
   <Story client:only="svelte" lang={lang} />
 </Base>

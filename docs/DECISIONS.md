@@ -1855,3 +1855,26 @@ _2026-09-28_ (P5-3: the site is published on checkgraph.dev)
 - **DMA terms.** They were checked before publishing and recorded in `docs/DATA_SOURCES.md`. No
   licence is published for the archive. The policy's one restriction concerns identifying
   *persons*, and the site shows vessels only, credited to the DMA.
+
+_2026-09-28_ (P5-9: the shadow-fleet page and share cards, author's pick)
+
+- **One vessel = one IMO.** Its mmsi are merged, since a new flag means a new mmsi. "Seen"
+  counts days with any observed hour. `lead_days` is the first designation minus the first
+  sighting in the exported months. The page states that this is not the real first passage,
+  and that passing before a sanction is not predictability (prediction stays frozen).
+- **Regimes, not "Russian".** Each vessel's first designation is classed russia / iran / other
+  from its programme text (RUSSIA, UKRAINE, PEESA → russia). The page shows 28 Iran-programme
+  vessels instead of calling all 260 the Russian shadow fleet.
+- **EU absence stated, not hidden.** The EU's vessel listings (port-access bans, Annex XLII of
+  Regulation 833/2014) are not in the EU financial-sanctions file this project uses, which
+  holds 2 vessels. The "who sanctioned" chart covers the UK and the US, and says why.
+- **Colour.** Orange means sanctioned after passing, grey means already sanctioned. The
+  validator passes CVD (13.7 protan) and normal vision. It flags the grey as reading grey, which
+  is intended: it is the context category, and it carries a legend and tooltips.
+- **Table signals.** Only AIS gaps, ship-to-ship encounters and unexplained draught changes are
+  shown. The course/destination check shared the draught check's glyph and does not
+  discriminate (P4-0).
+- **Share cards come from the site itself.** They are rendered from the heroes at 1200x630 and
+  are git-ignored like the data they draw.
+- **Visitor stats wait for the author.** The wrangler login cannot create a Web Analytics site
+  (API auth error). The zone's own traffic analytics already work without it.

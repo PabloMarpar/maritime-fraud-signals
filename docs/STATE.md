@@ -431,6 +431,18 @@ so an old `Traceback` in a log does not mean the current run failed).
      local relay; a plain build targets the public relay.
    - Earlier today: the relay was run against real AISStream (P5-6: ~25 msg/s, 3,210 vessels in
      10 min). Basemap land is lighter (#1c2839).
+   - **Shadow-fleet page (P5-9, live 2026-09-28)** at `/[lang]/shadow-fleet/`, built from
+     `shadow.json` (`report.export_viz.shadow_fleet`; `--shadow-only` rebuilds it from the
+     dossiers). On June + November 2024: 260 sanctioned vessels (by IMO) seen, 231 (89%) before
+     their first designation (median ~7 months), 22 changed flag. Regimes: Russia 229, Iran 28,
+     other 3. The EU financial-sanctions file holds only 2 vessels; the page says so.
+   - **Share cards (P5-9):** `viz/scripts/og-images.mjs` renders 1200x630 JPEGs (story, shadow,
+     generic, per language) from a running preview into `public/og/` (git-ignored). Re-run it
+     after a re-export, then rebuild.
+   - **Visitor stats (P5-10, waits for the author):** the wrangler login cannot create Web
+     Analytics sites. The author adds checkgraph.dev under Web Analytics in the dashboard and
+     passes the public token; it goes in `viz/.env.production` as `PUBLIC_CF_BEACON`, and
+     `Base.astro` then loads the no-cookie beacon.
 6. Then P4-4 (calibration). Challengers from the research report:
    - TabPFN v2 / TabICL (licence-clean);
    - bagging PU (averaging models trained on resampled vessels whose label is unknown);

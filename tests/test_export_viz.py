@@ -139,3 +139,69 @@ def test_discover_windows_needs_a_parquet_file(tmp_path):
     assert [w.id for w in windows] == ["2024-06-01_2024-06-30", "2024-11-01_2024-11-30"]
     assert windows[0].start == date(2024, 6, 1)
     assert windows[0].t0 == datetime(2024, 6, 1)  # noqa: DTZ001
+
+
+def test_sanction_regime():
+    assert ev.sanction_regime("RUSSIA-EO14024") == "russia"
+    assert ev.sanction_regime("The Russia (Sanctions) (EU Exit) Regulations 2019") == "russia"
+    assert ev.sanction_regime("UKRAINE-EO13685") == "russia"
+    assert ev.sanction_regime("IRAN-EO13902") == "iran"
+    assert ev.sanction_regime("SDGT") == "other"
+    assert ev.sanction_regime(None) == "other"
+
+
+def _dossier(mmsi, iso2, windows, sanctions, imo="9339337", **extra):
+    d = {"mmsi": mmsi, "imo": imo, "iso2": iso2, "ship_type": "Tanker", "length": 183.0,
+         "windows": windows, "sanctions": sanctions}
+    d.update(extra)
+    return d
+
+
+def _window(hours_by_day, names=(("NS LOTUS", 100),), dests=(), **events):
+    ev_ = {"n_gaps": 0, "sts": [], "behav": [], "spoof_counts": {}}
+    ev_.update(events)
+    return {"hours_by_day": hours_by_day, "names": [[n, c, None, None] for n, c in names],
+            "destinations": [[x, c, None, None] for x, c in dests], "events": ev_}
+
+
+def test_shadow_fleet_groups_mmsi_by_imo_across_a_flag_change():
+    june = [0.0] * 30
+    june[16], june[25] = 5.0, 2.0  # seen 17 and 26 June
+    nov = [0.0] * 30
+    nov[3] = 1.0  # seen 4 November under a new flag
+    uk = ["uk", "NS LOTUS", "Gabon", "The Russia (Sanctions) (EU Exit) Regulations 2019", "2024-07-31"]
+    ofac = ["ofac", "LEGACY", "Barbados", "RUSSIA-EO14024", "2025-01-10"]
+    dossiers = [
+        _dossier(626395000, "GA", {"2024-06-01_2024-06-30": _window(
+            june, dests=(("RUPRI", 10), ("EGPSD", 4)),
+            n_gaps=2, behav=[["draught_change_unexplained", None, 0, 0, 1, None]],
+            spoof_counts={"on_land": 50, "impossible_speed": 1})}, [uk, ofac]),
+        _dossier(314000001, "BB", {"2024-11-01_2024-11-30": _window(nov, names=(("LEGACY", 30),))},
+                 [ofac, ofac]),  # the same record matched twice must count once
+        _dossier(219000001, "DK", {"2024-06-01_2024-06-30": _window(june)}, [], imo="9000001"),
+    ]
+    [v] = ev.shadow_fleet(dossiers)
+    assert v["imo"] == "9339337"
+    assert v["flags"] == ["GA", "BB"]  # in order of first sighting
+    assert v["mmsi"] == [626395000, 314000001] and v["dossier"] == 626395000  # most hours first
+    assert v["names"] == ["NS LOTUS", "LEGACY"] and v["name"] == "NS LOTUS"
+    assert (v["first"], v["last"], v["days"]) == ("2024-06-17", "2024-11-04", 3)
+    assert v["windows"] == ["2024-06-01_2024-06-30", "2024-11-01_2024-11-30"]
+    assert v["designations"] == [["uk", "2024-07-31", "russia"], ["ofac", "2025-01-10", "russia"]]
+    assert v["designated"] == "2024-07-31"
+    assert v["lead_days"] == (date(2024, 7, 31) - date(2024, 6, 17)).days
+    assert v["events"] == {"gaps": 2, "sts": 0, "draught": 1, "dest": 0, "spoof": 1}  # no on_land
+    assert v["destinations"] == ["RUPRI", "EGPSD"]
+
+
+def test_shadow_fleet_skips_vessels_never_heard_and_marks_prior_designations():
+    heard = [0.0] * 30
+    heard[0] = 1.0
+    old = ["ofac", "YAZ", "Russia", "RUSSIA-EO14024", "2019-09-26"]
+    fleet = ev.shadow_fleet([
+        _dossier(273342890, "RU", {"2024-06-01_2024-06-30": _window(heard)}, [old], imo="9735323"),
+        _dossier(273000002, "RU", {"2024-06-01_2024-06-30": _window([0.0] * 30)}, [old],
+                 imo="9000002"),
+    ])
+    assert [v["imo"] for v in fleet] == ["9735323"]
+    assert fleet[0]["lead_days"] < 0  # already sanctioned when first seen

@@ -13,6 +13,7 @@ const en = {
     'An open investigation into how tankers sanctioned for carrying Russian oil move through the Danish straits: animated AIS tracks, detector events and vessel dossiers.',
 
   'nav.story': 'Story',
+  'nav.shadow': 'Shadow fleet',
   'nav.explore': 'Explore',
   'nav.live': 'Live',
   'nav.vessels': 'Vessels',
@@ -244,6 +245,7 @@ const es: Record<UIKey, string> = {
     'Una investigación abierta sobre cómo se mueven por los estrechos daneses los petroleros sancionados por transportar crudo ruso: trayectorias AIS animadas, eventos de los detectores y fichas de cada buque.',
 
   'nav.story': 'Historia',
+  'nav.shadow': 'Flota en la sombra',
   'nav.explore': 'Explorar',
   'nav.live': 'En vivo',
   'nav.vessels': 'Buques',

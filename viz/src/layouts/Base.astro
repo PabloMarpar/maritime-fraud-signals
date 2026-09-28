@@ -13,13 +13,17 @@ interface Props {
   description?: string;
   /** "app": full-viewport map page, header overlaid, no footer */
   mode?: 'page' | 'app';
+  /** Share card (public/og/<lang>-<og>.jpg, made by scripts/og-images.mjs) */
+  og?: 'story' | 'shadow' | 'site';
 }
 
-const { lang, path, title, description, mode = 'page' } = Astro.props;
+const { lang, path, title, description, mode = 'page', og = 'site' } = Astro.props;
 const siteName = t(lang, 'site.name');
 const fullTitle = title ? `${title} · ${siteName}` : siteName;
 const desc = description ?? t(lang, 'site.description');
 const absolute = (href: string) => new URL(href, Astro.site).href;
+// Cloudflare Web Analytics (no cookies): only when the public token is set in .env.production.
+const beacon = import.meta.env.PUBLIC_CF_BEACON as string | undefined;
 ---
 
 <!doctype html>
@@ -35,6 +39,17 @@ const absolute = (href: string) => new URL(href, Astro.site).href;
     <meta property="og:type" content="website" />
     <meta property="og:url" content={absolute(localePath(lang, path))} />
     <link rel="canonical" href={absolute(localePath(lang, path))} />
+    <meta property="og:site_name" content={siteName} />
+    <meta property="og:locale" content={lang === 'es' ? 'es_ES' : 'en_GB'} />
+    <meta property="og:image" content={absolute(`/og/${lang}-${og}.jpg`)} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={fullTitle} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={desc} />
+    <meta name="twitter:image" content={absolute(`/og/${lang}-${og}.jpg`)} />
+    {beacon && <script is:inline defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={JSON.stringify({ token: beacon })}></script>}
     <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}favicon.svg`} />
     {LANGS.map((l) => <link rel="alternate" hreflang={l} href={absolute(localePath(l, path))} />)}
   </head>
