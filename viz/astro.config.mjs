@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import svelte from '@astrojs/svelte';
 
 export default defineConfig({
+  site: 'https://checkgraph.dev',
   integrations: [svelte()],
   trailingSlash: 'ignore',
   build: { format: 'directory' },

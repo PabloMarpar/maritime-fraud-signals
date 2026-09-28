@@ -406,36 +406,31 @@ so an old `Traceback` in a log does not mean the current run failed).
    post-designation rows hurt. Pre-register it before running.
 4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
    Thresholds are fixed on March 2024 only; validate against GFW port visits.
-5. **Web (P5), in parallel:**
-   - **Live (P5-6 done 2026-09-28):** the key is in `.env`, and the relay works against real
-     AISStream. After ~10 min: 3,210 vessels (3,121 Danish straits, 89 Gibraltar, which is sparse
-     in AISStream), ~25 msg/s, 713 with a destination, 449 with an IMO (static reports arrive
-     every ~6 min). The page handled 3,000+ vessels with no errors. It already showed a listed
-     tanker live: CELT (ex-CALLISTO, IMO 9299692, UK 2024-10-17, OFAC 2025-01-10).
-   - **Public live relay (P5-7), built and tested locally 2026-09-28, NOT deployed.** The author
-     refused a paid server, and AISStream forbids browser connections (max 3 per account). So
-     `relay/` is a Cloudflare Worker with one Durable Object holding one shared upstream
-     connection, on the Workers Free plan; it is a TypeScript port of `ingest/aisstream.py` with
-     the same protocol. Under `wrangler dev` it gave ~20 msg/s, and the live page worked through
-     it. To deploy (author's go-ahead and Cloudflare login needed): `cd relay`,
-     `npx wrangler login`, `npx wrangler secret put AISSTREAM_API_KEY`, `npx wrangler deploy`
-     (custom domain `live.checkgraph.dev`). Harmless: `wrangler dev` logs "Network connection
-     lost" when a viewer disconnects; the relay keeps its state.
-   - Basemap land is lighter (#1c2839, author's feedback that land and sea looked alike).
-   - The dev server can time out while the archive build loads the machine. Use
-     `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` instead (a
-     plain build targets the public relay).
-   - **Publishing (P5-3):** the domain is **checkgraph.dev**, retired from the author's
-     `fake-review-detector` project. Its DNS is on Cloudflare (norman/jocelyn.ns.cloudflare.com).
-     Today the apex A record (75.2.60.5) and `www` (CNAME to `fake-review-detector-s.netlify.app`)
-     serve that old Netlify site. Recommended host: Cloudflare Pages. The DNS is already there, it
-     has unlimited bandwidth, and `wrangler pages deploy dist` uploads the prebuilt site (the data
-     is not in git). Limits: 20,000 files and 25 MiB per file. Today's build is 68 MB and 9,352
-     files (9,145 are dossiers), so more windows may need the dossiers bundled into shards. Waiting
-     for the author's go-ahead: publishing replaces the old site. Check the DMA's AIS licence
-     first. `gh` is not installed.
-   - After the archive build, run `python -m report.export_viz`: it picks up every built window
-     automatically.
+5. **Web (P5): the site is PUBLIC at https://checkgraph.dev (2026-09-28).** It is on the author's
+   Cloudflare account (245e8f47...). Everything uses the Workers Free plan, so no card and no bills.
+   - **Site:** `viz/wrangler.jsonc`, an assets-only Worker (`checkgraph-site`) serving `viz/dist`
+     on `checkgraph.dev` and `www`. Republish with `cd viz`, `npx astro build`, then
+     `../relay/node_modules/.bin/wrangler deploy`.
+   - **Live relay:** `relay/` (`maritime-live-relay`) on `live.checkgraph.dev`. It holds the
+     AISStream key as a Worker secret, answers `/health`, and only lets checkgraph.dev pages
+     connect. Measured from outside: ~21 msg/s. Republish with `cd relay` and
+     `npx wrangler deploy`.
+   - **Wrangler login:** OAuth, stored in `%APPDATA%\xdg.config\.wrangler`. It has no DNS
+     permission.
+   - **DNS switch:** the author deleted the old Netlify records by hand; they were apex A
+     75.2.60.5 and `www` CNAME `fake-review-detector-s.netlify.app`. Recreate them to roll back.
+     The old Netlify site itself still exists, untouched.
+   - **Next:**
+     - After the archive build, run `python -m report.export_viz` and republish the site.
+     - Watch the free limit of 20,000 files per deployment. Today there are 9,353, of which
+       9,145 are dossiers; bundle the dossiers into shards before more windows push it past
+       the limit.
+     - After a day of real use, check the relay's free-plan usage in the Cloudflare dashboard.
+   - **Local viewing:** the dev server can time out while the archive build loads the machine.
+     Use `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
+     local relay; a plain build targets the public relay.
+   - Earlier today: the relay was run against real AISStream (P5-6: ~25 msg/s, 3,210 vessels in
+     10 min). Basemap land is lighter (#1c2839).
 6. Then P4-4 (calibration). Challengers from the research report:
    - TabPFN v2 / TabICL (licence-clean);
    - bagging PU (averaging models trained on resampled vessels whose label is unknown);

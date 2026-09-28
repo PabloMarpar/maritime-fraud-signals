@@ -1832,3 +1832,26 @@ _2026-09-28_ (P5-7: the public live relay is a free Cloudflare Worker, not a ser
   `pipeline.manifest` read/write (a whole-file read-modify-write; without the lock a 6-writer test
   kept 10 of 60 entries and Windows raised `PermissionError` on `os.replace`), and (2) the build
   script waiting for the backfill that covers a window's days before starting that window.
+
+_2026-09-28_ (P5-3: the site is published on checkgraph.dev)
+
+- **The site is an assets-only Cloudflare Worker, not Pages.** `viz/wrangler.jsonc` serves the
+  prebuilt `viz/dist` (the data is not in git, so a git-connected build cannot produce it).
+  - A Worker `custom_domain` route creates its own DNS record and certificate with the same
+    wrangler login the relay uses.
+  - Pages needs dashboard steps or a DNS-scoped token to attach an apex domain.
+  - Static-asset requests are free and unmetered on the Workers Free plan. The per-deployment
+    limit is 20,000 files, so the dossiers need sharding before re-exports reach it (P5-8).
+- **Switching the domain needed the author's hands once.** Two things got in the way:
+  - A new account needs a `workers.dev` subdomain before any Worker deploys. It was created
+    through the API as `checkgraph.workers.dev`.
+  - Cloudflare refuses to attach a custom domain over existing DNS records. The API's
+    `override_existing_dns_record` did not help, and wrangler's OAuth login has no DNS scope.
+    So the author deleted the two Netlify records (apex A 75.2.60.5 and `www` CNAME
+    `fake-review-detector-s.netlify.app`) in the dashboard. Recreating them rolls the switch back.
+- **Absolute URLs.** `site: 'https://checkgraph.dev'` is set. `Base.astro` now emits a canonical
+  link, `og:url` and absolute hreflang alternates. There is a bilingual `404.astro`, because the
+  language of a broken link is unknown.
+- **DMA terms.** They were checked before publishing and recorded in `docs/DATA_SOURCES.md`. No
+  licence is published for the archive. The policy's one restriction concerns identifying
+  *persons*, and the site shows vessels only, credited to the DMA.

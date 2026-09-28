@@ -19,6 +19,7 @@ const { lang, path, title, description, mode = 'page' } = Astro.props;
 const siteName = t(lang, 'site.name');
 const fullTitle = title ? `${title} · ${siteName}` : siteName;
 const desc = description ?? t(lang, 'site.description');
+const absolute = (href: string) => new URL(href, Astro.site).href;
 ---
 
 <!doctype html>
@@ -32,8 +33,10 @@ const desc = description ?? t(lang, 'site.description');
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={desc} />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={absolute(localePath(lang, path))} />
+    <link rel="canonical" href={absolute(localePath(lang, path))} />
     <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}favicon.svg`} />
-    {LANGS.map((l) => <link rel="alternate" hreflang={l} href={localePath(l, path)} />)}
+    {LANGS.map((l) => <link rel="alternate" hreflang={l} href={absolute(localePath(l, path))} />)}
   </head>
   <body class:list={[`mode-${mode}`]}>
     <Header lang={lang} path={path} overlay={mode === 'app'} />

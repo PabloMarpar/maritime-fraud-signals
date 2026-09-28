@@ -74,6 +74,10 @@ npx wrangler dev --port 8765                                   # run it locally;
 npx wrangler login && npx wrangler secret put AISSTREAM_API_KEY && npx wrangler deploy   # publish
 ```
 
+The site is published at **https://checkgraph.dev** as an assets-only Cloudflare Worker
+(`viz/wrangler.jsonc`). To republish after a re-export, run `cd viz && npx astro build`, then
+`../relay/node_modules/.bin/wrangler deploy`.
+
 A production build points the live page at the public relay. To view a local build against a
 local relay, run `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build`, then `npx astro preview`.
 

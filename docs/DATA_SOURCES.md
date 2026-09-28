@@ -37,6 +37,16 @@ All sources are open, free and publicly documented. Verified reachable on 2026-0
   17,239,519 rows, 4,878 distinct MMSI. The question of `.zip` vs `.csv` is closed.
 - **Why this source:** dense coverage of the Danish straits, the chokepoint through which all
   Baltic oil traffic must pass.
+- **Terms (checked 2026-09-28).** No licence is published for the S3 archive itself. The DMA's
+  "AIS data management policy" was written for its older subscription service and rests on the
+  Danish PSI act (no. 596 of 24 June 2005). It says:
+  - data must not be combined with other data in a way that makes *persons* identifiable
+    without a permit from the Danish Data Protection Agency;
+  - the DMA does not guarantee the data's correctness.
+
+  It states no attribution rule and no ban on commercial use. The public site (checkgraph.dev)
+  shows vessels only, never persons, and credits "AIS: Danish Maritime Authority" on every map
+  and on the about page.
 
 ### AISStream.io — live
 - **URL:** `wss://stream.aisstream.io/v0/stream`

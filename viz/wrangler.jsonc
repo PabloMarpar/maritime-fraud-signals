@@ -1,0 +1,18 @@
+// The public site: the static build in dist/, served by Cloudflare as an assets-only Worker on the
+// author's domain (P5-3). Static-asset requests are free and unmetered on the Workers Free plan.
+// Publish: npx astro build && npx wrangler deploy   (dist/ must be a production build, whose live
+// page points at wss://live.checkgraph.dev -- see .env.production).
+{
+  "$schema": "../relay/node_modules/wrangler/config-schema.json",
+  "name": "checkgraph-site",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "checkgraph.dev", "custom_domain": true },
+    { "pattern": "www.checkgraph.dev", "custom_domain": true }
+  ]
+}
