@@ -1825,3 +1825,10 @@ _2026-09-28_ (P5-7: the public live relay is a free Cloudflare Worker, not a ser
   now, reconnecting" with a link to the explorer.
 - **Basemap land #0d1624 → #1c2839.** The author could not tell land from sea. The sea is
   unchanged, so tracks and density read as before.
+- **Later months are downloaded in the background while earlier windows run their detectors.**
+  Measured: one S3 stream 9.4 MB/s, four streams 12.5 MB/s in total -- the line is saturated, so
+  parallel downloads alone barely help; overlapping the bandwidth-bound downloads with the
+  CPU-bound detectors hides them (~20 h -> ~15 h). Made safe by (1) a lock file around every
+  `pipeline.manifest` read/write (a whole-file read-modify-write; without the lock a 6-writer test
+  kept 10 of 60 entries and Windows raised `PermissionError` on `os.replace`), and (2) the build
+  script waiting for the backfill that covers a window's days before starting that window.

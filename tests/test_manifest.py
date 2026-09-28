@@ -146,3 +146,41 @@ def test_summary_counts_each_state(tmp_path):
 def test_summary_empty_manifest(tmp_path):
     path = tmp_path / "manifest.json"
     assert manifest.summary(path) == {"total_days": 0, "raw_only": 0, "clean": 0, "reduced": 0}
+
+
+def test_concurrent_writers_never_lose_each_others_days(tmp_path):
+    """Each record() is a whole-file read-modify-write; without the lock, concurrent writers drop
+    each other's updates (a background backfill runs alongside pipeline.window)."""
+    import threading
+    from datetime import timedelta
+
+    path = tmp_path / "manifest.json"
+    start = date(2024, 7, 1)
+
+    def writer(offset: int) -> None:
+        for i in range(10):
+            manifest.record(path, start + timedelta(days=offset * 10 + i), cleaned_at="x")
+
+    threads = [threading.Thread(target=writer, args=(k,)) for k in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(manifest.load(path)) == 60
+    assert not path.with_name(path.name + ".lock").exists()
+
+
+def test_stale_lock_from_a_killed_process_is_broken(tmp_path):
+    import os
+    import time
+
+    path = tmp_path / "manifest.json"
+    lock = path.with_name(path.name + ".lock")
+    lock.write_text("")
+    old = time.time() - manifest.LOCK_STALE_SECONDS - 5
+    os.utime(lock, (old, old))
+
+    manifest.record(path, date(2024, 7, 1), cleaned_at="x")
+
+    assert manifest.day_state(path, date(2024, 7, 1)) == "clean"

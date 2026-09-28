@@ -346,12 +346,27 @@ _Last updated: 2026-09-28_
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
-`scripts/build_archive_windows.sh`, **relaunched 2026-09-28 11:36 via WMI (PID 5416, parent
+`scripts/build_archive_windows.sh`, **relaunched 2026-09-28 12:50 via WMI (bash PID 30940, parent
 `WmiPrvSE`)**. It builds one window at a time, then `detect.gaps` per window, then
 `process.sanctions_match --force`, then one panel per window at
-`data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
+`data/processed/panel/window=<start>_<end>/`. **New since 12:50: two background backfills**
+(`prefetch_2024-07`: 2024-07-01..10-01, `prefetch_2024-12`: 2024-12-01..2025-02-26) download+clean
+later months while April/May/June run their detectors; the July and December windows `wait` for
+their backfill first, so no two processes ever touch the same day. Downloads are bandwidth-bound
+(measured: 1 stream 9.4 MB/s, 4 streams 12.5 MB/s total, so more parallel downloads barely help);
+overlapping them with the CPU-bound detectors is the win, ~20 h -> ~15 h if uninterrupted.
+`data/manifest.json` is now lock-protected (`pipeline.manifest._locked`) -- without it, a
+concurrency test kept 10 of 60 entries. Progress: `outputs/logs/build_archive_windows.status`
 (START/OK/FAIL per step, `DONE` at the end); per-step logs sit next to it (appended across runs,
 so an old `Traceback` in a log does not mean the current run failed).
+- **Killed again at ~11:41 (5 min after the 11:36 WMI launch), no error, no reboot.** WMI-launched
+  processes are verified NOT to be in a job object (`IsProcessInJob` = False), so the WMI launch
+  itself is fine. At the same time the other agent finished a ~10 min test of its live relay
+  (`ingest.aisstream`), which also died; most likely it stopped processes by name and took the
+  build (bash + python) with it. **Other agents: never kill `python`/`bash` processes by name --
+  stop only the PID you started.** The build's processes are `pipeline.window`,
+  `pipeline.backfill`, `detect.gaps`, `features.panel` under a `bash.exe` whose parent is
+  `WmiPrvSE`.
 - **Why it died on 2026-09-28 (~09:00-11:00) with no error:** the machine did NOT reboot. It had
   been started with `Start-Process` from a Claude Code session, and Windows kills a session's child
   processes when the session exits (job object). **Always launch it via WMI**, which parents it to
@@ -360,13 +375,14 @@ so an old `Traceback` in a log does not mean the current run failed).
   CurrentDirectory = '<repo root>'}` (Git bash is at `C:/Program Files/Git/bin/bash.exe`).
 - **Why May's `check_on_land` ran >6 h: the 8-worker thread pool was counterproductive.** Fixed
   (`ON_LAND_MAX_WORKERS = 1`, ~30 min per window expected) -- see `docs/DECISIONS.md` 2026-09-28.
-- **Clean on disk at relaunch:** 2024-03 (19 d), 04 (30), 05 (31), 06, 10, 11 -- ~81 of ~272 new
-  days (~30%). This run starts with April (its earlier FAIL is retried naturally), then May
-  (spoofing restarts from scratch: it was killed before writing).
+- **Clean on disk at the 12:50 relaunch:** 2024-03 (22 d), 04 (30), 05 (31), 06, 10, 11 -- ~84 of
+  ~272 new days (~31%). This run starts with April (its earlier FAIL is retried naturally), then
+  May (spoofing restarts from scratch: it was killed before writing).
 - The other agent's live relay (`python -m ingest.aisstream`, P5-6) may run at the same time; it
-  writes nothing to disk, so it does not conflict with the build.
-- ~190 days remain at ~3-4 min/day, plus ~1.5-2 h of detectors per window (`sts` ~76 min is now
-  the slowest step). That is **~1-1.5 days if the machine stays on**.
+  writes nothing to disk, so it does not conflict with the build -- but see the kill note above.
+- Uninterrupted, a day takes ~1.6 min (download ~50 s + clean ~45 s); ~190 days remain, now
+  overlapped with ~1.5-2 h of detectors per window (`sts` ~76 min is the slowest step). That is
+  **~15 h if the machine stays on**.
 - **If the machine sleeps or shuts down, the build stops.** Validate the last written day with
   DuckDB (a shutdown mid-write can leave a truncated partition), then just re-run the script:
   every step is idempotent.
