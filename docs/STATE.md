@@ -387,7 +387,8 @@ so an old `Traceback` in a log does not mean the current run failed).
   DuckDB (a shutdown mid-write can leave a truncated partition), then just re-run the script:
   every step is idempotent.
 - **Never start a second build over `data/` while it runs.** Parallel work may read `data/`
-  through DuckDB (keep it to ~4 threads) but must not write there.
+  through DuckDB (keep it to ~4 threads) but must not write there. **Do not edit
+  `scripts/build_archive_windows.sh` while it runs** -- bash reads a script as it executes it.
 - A stale partial download `data/tmp/dma-2024-04-02-*` is harmless; delete it after `DONE`.
 - Disk: ~128 GB of new clean data against ~239 GB free; no pruning needed. **Do not prune clean
   data**: `features.static` and P4-3h need message-level draught, destination and positions.
