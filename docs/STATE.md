@@ -367,9 +367,12 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
   **April and May are marked FAIL on purpose**: both were stopped by PID (17:36 and 19:40) because
   they ran the old slow code; the script skips a failed window and goes on. June verified in 51 s;
   July started 19:40 with all three fixes below.
-- **The April/May rerun is already scheduled:** a waiter (powershell PID 23428, launched via WMI
-  19:45) runs `Wait-Process -Id 30940`, logs `START rerun_after_30940` to the status file, then
-  runs the script once more. Cancel it by killing PID 23428 (by PID only).
+- **The April/May rerun AND a shutdown are scheduled:** waiter powershell PID 13648 (via WMI,
+  19:52; script copy in the session scratchpad, `rerun_then_shutdown.ps1`, transcript
+  `outputs/logs/rerun_then_shutdown.log`) polls PID 30940 every minute; when it exits it logs
+  `START rerun_after_build`, runs the script once more, then `shutdown /s /t 300` (cancel with
+  `shutdown /a`). Cancel the whole plan by killing PID 13648. (A first `Wait-Process` waiter,
+  PID 23428, died silently -- that pattern is unreliable here.)
 - **All downloads are done:** `prefetch2_winter` OK 17:08, `prefetch2_summer` OK 19:38. Every day
   2024-03-02..2025-02-26 (362) is clean on disk.
 - **Three speed fixes this session** (`docs/DECISIONS.md` 2026-09-28, commits 83da129, d646e1c,
