@@ -362,6 +362,8 @@
     // Narrow screens: the hero text covers the map, so frame tightly; later cards sit at the
     // bottom, so frame into the upper part.
     if (w < 820) return step === -1 ? { top: 60, bottom: 40, left: 0, right: 0 } : { top: 70, bottom: Math.round(h * 0.4), left: 10, right: 10 };
+    // The call to action sits in the middle, so the map fills the screen evenly around it.
+    if (step === STORY[lang].steps.length) return { top: 70, bottom: 10, left: 10, right: 10 };
     return { top: 90, bottom: 60, left: Math.min(560, Math.round(w * 0.42)), right: 170 };
   }
 
@@ -461,7 +463,9 @@
 <div class="story">
   <div class="sticky" aria-hidden="true">
     <div class="map" bind:this={container}></div>
-    <div class="shade" class:hero-shade={active === -1}></div>
+    <div class="shade shade-steps" class:on={active >= 0 && active < text.steps.length}></div>
+    <div class="shade shade-hero" class:on={active === -1}></div>
+    <div class="shade shade-cta" class:on={active === text.steps.length}></div>
   </div>
 
   <div class="content">
@@ -504,7 +508,7 @@
     {/each}
 
     <section class="step cta" data-step={text.steps.length}>
-      <div class="card glass cta-card">
+      <div class="card glass cta-card" class:active={active === text.steps.length}>
         <h2>{text.ctaTitle}</h2>
         <p>{text.ctaBody}</p>
         <div class="cta-buttons">
@@ -536,18 +540,31 @@
     background: #050b15;
   }
 
+  /* One shade per kind of section, cross-faded: gradients themselves cannot be transitioned. */
   .shade {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: linear-gradient(to right, rgba(4, 8, 15, 0.7) 0%, rgba(4, 8, 15, 0.25) 40%, transparent 62%);
-    transition: background 0.8s;
+    opacity: 0;
+    transition: opacity 0.8s var(--ease-out);
   }
 
-  .shade.hero-shade {
+  .shade.on {
+    opacity: 1;
+  }
+
+  .shade-steps {
+    background: linear-gradient(to right, rgba(4, 8, 15, 0.7) 0%, rgba(4, 8, 15, 0.25) 40%, transparent 62%);
+  }
+
+  .shade-hero {
     background:
       linear-gradient(to right, rgba(4, 8, 15, 0.94) 0%, rgba(4, 8, 15, 0.82) 38%, rgba(4, 8, 15, 0.2) 62%, transparent 75%),
       linear-gradient(to top, rgba(4, 8, 15, 0.85) 0%, transparent 35%);
+  }
+
+  .shade-cta {
+    background: radial-gradient(ellipse 70% 60% at 50% 50%, rgba(4, 8, 15, 0.82) 0%, rgba(4, 8, 15, 0.5) 55%, rgba(4, 8, 15, 0.25) 100%);
   }
 
   .content {
@@ -714,7 +731,7 @@
   }
 
   @media (max-width: 820px) {
-    .shade.hero-shade {
+    .shade-hero {
       background: linear-gradient(to top, rgba(4, 8, 15, 0.92) 0%, rgba(4, 8, 15, 0.72) 60%, rgba(4, 8, 15, 0.45) 100%);
     }
     .step {
@@ -728,7 +745,8 @@
     .card p {
       font-size: 15px;
     }
-    .shade {
+    .shade-steps,
+    .shade-cta {
       background: linear-gradient(to top, rgba(4, 8, 15, 0.6), transparent 60%);
     }
   }

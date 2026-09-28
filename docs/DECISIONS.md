@@ -1775,3 +1775,11 @@ _2026-09-27_ (P5: the web front end, `viz/`, started ahead of order at the autho
   recorded in `docs/DATA_SOURCES.md`; the EU list comes via OpenSanctions (CC BY-NC 4.0: fine
   for a non-commercial site with attribution); the author's domain and DNS; where the live relay
   runs.
+
+_2026-09-28_ (P5-3: the domain)
+- **The site will be published on checkgraph.dev**, the author's domain, which the author is
+  retiring from their `fake-review-detector` project. Its DNS is on Cloudflare and today serves
+  that old site from Netlify. The host is not decided yet. Cloudflare Pages is recommended because
+  the DNS is already there, bandwidth is unlimited, and it takes a direct upload of the prebuilt
+  site (the exported data is not in git). The switch waits for the author's go-ahead and the DMA
+  licence check.

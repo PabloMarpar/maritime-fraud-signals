@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-27_
+_Last updated: 2026-09-28_
 
 ## Done
 
@@ -385,10 +385,22 @@ logs sit next to it.
    post-designation rows hurt. Pre-register it before running.
 4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
    Thresholds are fixed on March 2024 only; validate against GFW port visits.
-5. **Web (P5), in parallel:** add `AISSTREAM_API_KEY=` to `.env` and run
-   `python -m ingest.aisstream` to test the live page for real (P5-6). Decide hosting for the
-   author's own domain (P5-3), and check the DMA's AIS licence first. After the archive build,
-   run `python -m report.export_viz`, which picks up every built window automatically.
+5. **Web (P5), in parallel:**
+   - **Live (P5-6):** `.env` exists but has no `AISSTREAM_API_KEY` yet (checked 2026-09-28), so
+     the live page shows its offline card. The author adds the key; then run
+     `python -m ingest.aisstream`. A public site also needs the relay on an always-on machine with
+     `wss://` (e.g. `live.checkgraph.dev`); not chosen yet.
+   - **Publishing (P5-3):** the domain is **checkgraph.dev**, retired from the author's
+     `fake-review-detector` project. Its DNS is on Cloudflare (norman/jocelyn.ns.cloudflare.com).
+     Today the apex A record (75.2.60.5) and `www` (CNAME to `fake-review-detector-s.netlify.app`)
+     serve that old Netlify site. Recommended host: Cloudflare Pages. The DNS is already there, it
+     has unlimited bandwidth, and `wrangler pages deploy dist` uploads the prebuilt site (the data
+     is not in git). Limits: 20,000 files and 25 MiB per file. Today's build is 68 MB and 9,352
+     files (9,145 are dossiers), so more windows may need the dossiers bundled into shards. Waiting
+     for the author's go-ahead: publishing replaces the old site. Check the DMA's AIS licence
+     first. `gh` is not installed.
+   - After the archive build, run `python -m report.export_viz`: it picks up every built window
+     automatically.
 6. Then P4-4 (calibration). Challengers from the research report:
    - TabPFN v2 / TabICL (licence-clean);
    - bagging PU (averaging models trained on resampled vessels whose label is unknown);
