@@ -165,6 +165,9 @@ LAND_GRID_CELL_DEG = 0.1
 # Neighbouring cells overlap by this much, so a point lying exactly on a grid line is still strictly
 # inside one cell's piece (ST_Contains excludes the boundary); SELECT DISTINCT drops the duplicate.
 LAND_GRID_OVERLAP_DEG = 1e-6
+ON_LAND_CONFIDENCE = 0.9
+ON_LAND_EVIDENCE_VALUE = 1.0
+ON_LAND_DETAIL = "position inside eroded land polygon"
 
 # Days run one at a time: each day's join already keeps ~12 of 16 threads busy inside DuckDB, and
 # concurrent cursors only contend. Measured 2026-09-28 on 4 May-2024 days, identical events:
@@ -275,12 +278,13 @@ def check_impossible_speed(con: duckdb.DuckDBPyConnection) -> list[SpoofingEvent
     return events
 
 
-def check_on_land(
+def _build_on_land_table(
     con: duckdb.DuckDBPyConnection,
     partitions: list[tuple[date, Path]],
     land_path: Path = LAND_PATH,
-) -> list[SpoofingEvent]:
-    """Flag every clean position solidly inside an eroded land polygon.
+) -> int:
+    """Write every clean position solidly inside an eroded land polygon to the ``_on_land`` table
+    (mmsi, timestamp, latitude, longitude) and return its row count.
 
     Requires the `all_days` view (see :func:`_build_all_days`) and the spatial extension loaded.
     See module docstring for why the land polygons are eroded before containment is tested, and for
@@ -375,20 +379,40 @@ def check_on_land(
     )
     con.execute("DROP TABLE _land_eroded")
 
-    def _query_day(path: Path) -> list[tuple]:
+    # Also a regular table, for the same reason; typed from all_days so values are never recast.
+    con.execute(
+        "CREATE OR REPLACE TABLE _on_land AS "
+        "SELECT mmsi, timestamp, latitude, longitude FROM all_days LIMIT 0"
+    )
+
+    def _query_day(path: Path) -> None:
         # con.cursor(): an independent connection sharing this database, safe to use
         # concurrently from a worker thread -- unlike reusing `con` itself across threads.
-        return con.cursor().execute(
+        con.cursor().execute(
+            "INSERT INTO _on_land "
             "SELECT DISTINCT a.mmsi, a.timestamp, a.latitude, a.longitude "
             f"FROM read_parquet('{path.as_posix()}') a, _land_pieces l "
             "WHERE ST_Contains(l.geom, ST_Point(a.longitude, a.latitude))"
-        ).fetchall()
+        )
 
-    rows: list[tuple] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=ON_LAND_MAX_WORKERS) as pool:
-        for result in pool.map(_query_day, (path for _day, path in partitions)):
-            rows.extend(result)
+        list(pool.map(_query_day, (path for _day, path in partitions)))
 
+    return con.execute("SELECT count(*) FROM _on_land").fetchone()[0]
+
+
+def check_on_land(
+    con: duckdb.DuckDBPyConnection,
+    partitions: list[tuple[date, Path]],
+    land_path: Path = LAND_PATH,
+) -> list[SpoofingEvent]:
+    """Flag every clean position solidly inside an eroded land polygon, as SpoofingEvents.
+
+    The work is :func:`_build_on_land_table`'s (see its docstring); this only converts its rows.
+    :func:`build_spoofing_events` reads the table directly instead -- at ~12M rows a window, the
+    round trip through Python objects and ``executemany`` took about an hour.
+    """
+    _build_on_land_table(con, partitions, land_path)
     return [
         SpoofingEvent(
             mmsi=mmsi,
@@ -396,11 +420,13 @@ def check_on_land(
             event_time=ts,
             latitude=lat,
             longitude=lon,
-            confidence=0.9,
-            evidence_value=1.0,
-            detail="position inside eroded land polygon",
+            confidence=ON_LAND_CONFIDENCE,
+            evidence_value=ON_LAND_EVIDENCE_VALUE,
+            detail=ON_LAND_DETAIL,
         )
-        for mmsi, ts, lat, lon in rows
+        for mmsi, ts, lat, lon in con.execute(
+            "SELECT mmsi, timestamp, latitude, longitude FROM _on_land"
+        ).fetchall()
     ]
 
 
@@ -681,24 +707,27 @@ def build_spoofing_events(
         _build_all_days(con, partitions)
 
         events: list[SpoofingEvent] = []
+        counts: dict[str, int] = {}
         for name, run_check in (
             ("impossible_speed", lambda: check_impossible_speed(con)),
-            ("on_land", lambda: check_on_land(con, partitions, land_path)),
+            # on_land's rows stay in DuckDB (`_on_land`) -- see check_on_land's docstring.
+            ("on_land", lambda: _build_on_land_table(con, partitions, land_path)),
             ("synthetic_circle", lambda: check_synthetic_circles(con, voyages_path, start, end)),
             ("simultaneous_position", lambda: check_simultaneous_positions(con)),
         ):
             check_start = datetime.now(timezone.utc)
             found = run_check()
             elapsed = (datetime.now(timezone.utc) - check_start).total_seconds()
-            logger.info("Check %s: %d event(s) in %.1fs", name, len(found), elapsed)
-            events.extend(found)
+            if name == "on_land":
+                counts[name] = found
+            else:
+                events.extend(found)
+                counts[name] = len(found)
+            logger.info("Check %s: %d event(s) in %.1fs", name, counts[name], elapsed)
 
-        counts: dict[str, int] = {}
-        for event in events:
-            counts[event.kind] = counts.get(event.kind, 0) + 1
         logger.info(
             "Detected %d spoofing event(s) in %s..%s: %s",
-            len(events),
+            sum(counts.values()),
             start.isoformat(),
             end.isoformat(),
             counts,
@@ -728,6 +757,11 @@ def build_spoofing_events(
                     for event in events
                 ],
             )
+        con.execute(
+            "INSERT INTO _spoofing_events "
+            "SELECT mmsi, 'on_land', timestamp, latitude, longitude, ?, ?, ? FROM _on_land",
+            [ON_LAND_CONFIDENCE, ON_LAND_EVIDENCE_VALUE, ON_LAND_DETAIL],
+        )
 
         atomic_write_parquet(
             con,
