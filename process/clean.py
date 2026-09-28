@@ -24,7 +24,7 @@ are applied, in order, each logged at INFO level with the row count it drops
 3. **Duplicate messages.** The same MMSI reporting an identical
    (timestamp, latitude, longitude) more than once is almost certainly a
    retransmission rather than two independent reports, so only the first
-   occurrence (by rowid) is kept. Two genuinely different timestamps for the
+   occurrence (by position in the raw file) is kept. Two genuinely different timestamps for the
    same MMSI/position -- e.g. a moored vessel -- are not duplicates and both
    survive.
 
@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
@@ -74,7 +75,13 @@ def _clean_partition(con: duckdb.DuckDBPyConnection, raw_path: Path, clean_path:
     file.
     """
     raw_source = raw_path.as_posix()
-    con.execute(f"CREATE OR REPLACE VIEW raw AS SELECT * FROM read_parquet('{raw_source}')")
+    # file_row_number is the row's position in the raw file -- the "file order" Rule 3 keeps the
+    # first duplicate by. It comes straight from the Parquet reader, in parallel; the earlier
+    # row_number() OVER () forced one serial pass over the whole day to number the rows.
+    con.execute(
+        "CREATE OR REPLACE VIEW raw AS "
+        f"SELECT * FROM read_parquet('{raw_source}', file_row_number=true)"
+    )
     (raw_count,) = con.execute("SELECT count(*) FROM raw").fetchone()
 
     # Rule 1: invalid MMSI.
@@ -95,24 +102,26 @@ def _clean_partition(con: duckdb.DuckDBPyConnection, raw_path: Path, clean_path:
     logger.info("Rule 2 (impossible coordinates): dropped %d rows", mmsi_count - coords_count)
 
     # Rule 3: duplicate (mmsi, timestamp, latitude, longitude), keep the first
-    # occurrence. Parquet scans have no rowid pseudocolumn, so an explicit
-    # sequence number stands in for "file order" as the tie-break.
-    con.execute(
-        "CREATE OR REPLACE VIEW sequenced AS "
-        "SELECT *, row_number() OVER () AS _seq FROM valid_coords"
-    )
+    # occurrence in file order (file_row_number, see the raw view above).
     con.execute(
         "CREATE OR REPLACE VIEW deduped AS "
-        "SELECT * EXCLUDE (_seq) FROM sequenced QUALIFY row_number() OVER ("
-        "PARTITION BY mmsi, timestamp, latitude, longitude ORDER BY _seq"
+        "SELECT * EXCLUDE (file_row_number) FROM valid_coords QUALIFY row_number() OVER ("
+        "PARTITION BY mmsi, timestamp, latitude, longitude ORDER BY file_row_number"
         ") = 1"
     )
-    (deduped_count,) = con.execute("SELECT count(*) FROM deduped").fetchone()
-    logger.info("Rule 3 (duplicate messages): dropped %d rows", coords_count - deduped_count)
 
+    # Written to a temporary sibling and renamed into place: a process killed mid-write (a
+    # shutdown, an out-of-memory crash) otherwise leaves a truncated part-0.parquet that
+    # clean_day's "already cleaned" check then skips for good. The dedup runs once, for the
+    # COPY; the row count comes from the written file's metadata.
     clean_path.parent.mkdir(parents=True, exist_ok=True)
-    clean_target = clean_path.as_posix()
-    con.execute(f"COPY (SELECT * FROM deduped) TO '{clean_target}' (FORMAT PARQUET)")
+    tmp_path = clean_path.with_name(clean_path.name + ".tmp")
+    con.execute(f"COPY (SELECT * FROM deduped) TO '{tmp_path.as_posix()}' (FORMAT PARQUET)")
+    (deduped_count,) = con.execute(
+        f"SELECT count(*) FROM read_parquet('{tmp_path.as_posix()}')"
+    ).fetchone()
+    os.replace(tmp_path, clean_path)
+    logger.info("Rule 3 (duplicate messages): dropped %d rows", coords_count - deduped_count)
     return deduped_count
 
 

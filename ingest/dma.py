@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -233,13 +234,16 @@ def _csv_to_parquet(csv_path: Path, parquet_path: Path) -> int:
         select_list = ", ".join(
             f'"{col[0]}" AS "{_normalise(col[0])}"' for col in columns
         )
-        parquet_target = parquet_path.as_posix()
+        # Written to a temporary sibling and renamed into place, so a process killed mid-write
+        # never leaves a truncated part-0.parquet that download_day would then skip as done.
+        tmp_path = parquet_path.with_name(parquet_path.name + ".tmp")
         con.execute(
-            f"COPY (SELECT {select_list} FROM raw) TO '{parquet_target}' (FORMAT PARQUET)"
+            f"COPY (SELECT {select_list} FROM raw) TO '{tmp_path.as_posix()}' (FORMAT PARQUET)"
         )
         (row_count,) = con.execute(
-            f"SELECT count(*) FROM '{parquet_target}'"
+            f"SELECT count(*) FROM read_parquet('{tmp_path.as_posix()}')"
         ).fetchone()
+        os.replace(tmp_path, parquet_path)
         return row_count
     finally:
         con.close()
