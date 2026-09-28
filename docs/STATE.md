@@ -346,23 +346,27 @@ _Last updated: 2026-09-28_
 ## In progress
 
 **P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
-`scripts/build_archive_windows.sh` runs detached (PID 8820, relaunched 2026-09-27 17:53). It
-builds one window at a time, then `detect.gaps` per window, then `process.sanctions_match --force`,
-then one panel per window at `data/processed/panel/window=<start>_<end>/`. Progress:
-`outputs/logs/build_archive_windows.status` (START/OK/FAIL per step, `DONE` at the end); per-step
-logs sit next to it.
-- **Status 2026-09-28 08:50.** Build alive (PID 8820), no interruption since 17:53. Clean on disk:
-  2024-03 (19 d), 04 (30), 05 (31), 06, 10, 11 -- ~81 of ~272 new days (~30%). April's window FAILED
-  at start (a truncated raw partition left by a shutdown, since deleted). **After `DONE`, re-run
-  the script once to build April** (and any other FAIL).
-- **May's detectors are slow: `spoofing.check_on_land` has run >6 h (since 02:29; November: 58
-  min)** at only ~20-30% total CPU and no disk I/O; `py-spy dump` (installed for this) shows all 8
-  workers inside their DuckDB query, not hung. May has ~25% more rows/day and a wider bbox (lon
-  2.1-18.6 vs 3.4-16.8 in November), which does not explain 6x. Not yet diagnosed; if later months
-  repeat it (~+5 h each), fix before continuing. Note: per-step logs are appended across runs, so
-  an old `Traceback` in a log does not mean the current run failed.
-- ~190 days remain at ~3 min/day, plus ~2.5 h of detectors per window (`sts` ~76 min). That is
-  **~1.5 days if the machine stays on**.
+`scripts/build_archive_windows.sh`, **relaunched 2026-09-28 11:36 via WMI (PID 5416, parent
+`WmiPrvSE`)**. It builds one window at a time, then `detect.gaps` per window, then
+`process.sanctions_match --force`, then one panel per window at
+`data/processed/panel/window=<start>_<end>/`. Progress: `outputs/logs/build_archive_windows.status`
+(START/OK/FAIL per step, `DONE` at the end); per-step logs sit next to it (appended across runs,
+so an old `Traceback` in a log does not mean the current run failed).
+- **Why it died on 2026-09-28 (~09:00-11:00) with no error:** the machine did NOT reboot. It had
+  been started with `Start-Process` from a Claude Code session, and Windows kills a session's child
+  processes when the session exits (job object). **Always launch it via WMI**, which parents it to
+  `WmiPrvSE`, outside the session: PowerShell `Invoke-CimMethod -ClassName Win32_Process
+  -MethodName Create -Arguments @{CommandLine = '"<Git>/bin/bash.exe" scripts/build_archive_windows.sh';
+  CurrentDirectory = '<repo root>'}` (Git bash is at `C:/Program Files/Git/bin/bash.exe`).
+- **Why May's `check_on_land` ran >6 h: the 8-worker thread pool was counterproductive.** Fixed
+  (`ON_LAND_MAX_WORKERS = 1`, ~30 min per window expected) -- see `docs/DECISIONS.md` 2026-09-28.
+- **Clean on disk at relaunch:** 2024-03 (19 d), 04 (30), 05 (31), 06, 10, 11 -- ~81 of ~272 new
+  days (~30%). This run starts with April (its earlier FAIL is retried naturally), then May
+  (spoofing restarts from scratch: it was killed before writing).
+- The other agent's live relay (`python -m ingest.aisstream`, P5-6) may run at the same time; it
+  writes nothing to disk, so it does not conflict with the build.
+- ~190 days remain at ~3-4 min/day, plus ~1.5-2 h of detectors per window (`sts` ~76 min is now
+  the slowest step). That is **~1-1.5 days if the machine stays on**.
 - **If the machine sleeps or shuts down, the build stops.** Validate the last written day with
   DuckDB (a shutdown mid-write can leave a truncated partition), then just re-run the script:
   every step is idempotent.
