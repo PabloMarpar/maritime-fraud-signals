@@ -1783,3 +1783,17 @@ _2026-09-28_ (P5-3: the domain)
   the DNS is already there, bandwidth is unlimited, and it takes a direct upload of the prebuilt
   site (the exported data is not in git). The switch waits for the author's go-ahead and the DMA
   licence check.
+
+_2026-09-28_ (P4-3b archive build: two operational fixes)
+
+- **`detect.spoofing.check_on_land` runs days one at a time again (`ON_LAND_MAX_WORKERS = 1`).**
+  The 8-worker pool added in P4-1b was counterproductive: each day's point-in-polygon join already
+  keeps ~12 of 16 threads busy inside DuckDB, and concurrent cursors only contend. Measured on 4
+  May-2024 days with identical events: 1 worker 248 s (12.4 cores avg), 4 workers 531 s (7.7
+  cores); May's 31-day window with 8 workers ran >6 h at ~20-30% CPU. Ruled out first: the land
+  geometry (one May day costs 54-55 s against May's or November's land pieces alike). The P4-1b
+  claim that the pool made November faster than June was confounded with the Windows Defender
+  exclusion applied in the same run.
+- **Long builds are launched through WMI, not `Start-Process`.** A process started from a Claude
+  Code session is killed when the session exits (Windows job object); that, not a reboot, is what
+  stopped the build on 2026-09-28. `Win32_Process.Create` parents it to `WmiPrvSE`, outside the job.

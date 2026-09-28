@@ -160,10 +160,11 @@ BBOX_OUTLIER_QUANTILE = 0.001
 # flagged, only how many vertices ST_Contains has to test against.
 LAND_SIMPLIFY_TOLERANCE_DEG = 0.001
 
-# check_on_land's per-day join runs on a thread pool instead of one Python-level loop: a real
-# 30-day run measured only ~18% CPU use (the day loop was the serial part; each day's own query
-# only partially uses DuckDB's internal thread pool). 8 matches this machine's physical core count.
-ON_LAND_MAX_WORKERS = 8
+# Days run one at a time: each day's join already keeps ~12 of 16 threads busy inside DuckDB, and
+# concurrent cursors only contend. Measured 2026-09-28 on 4 May-2024 days, identical events:
+# 1 worker 248s wall / 12.4 cores avg, 4 workers 531s / 7.7 cores; 8 workers ran a 31-day window
+# for >6h at ~20-30% total CPU (vs ~32 min projected serially).
+ON_LAND_MAX_WORKERS = 1
 
 # Check 3: synthetic circles.
 MIN_POINTS_FOR_CIRCLE = 20
