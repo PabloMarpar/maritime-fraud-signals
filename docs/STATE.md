@@ -371,6 +371,25 @@ overlapping them with the CPU-bound detectors is the win, ~20 h -> ~15 h if unin
 concurrency test kept 10 of 60 entries. Progress: `outputs/logs/build_archive_windows.status`
 (START/OK/FAIL per step, `DONE` at the end); per-step logs sit next to it (appended across runs,
 so an old `Traceback` in a log does not mean the current run failed).
+- **Status 15:40 2026-09-28.** April window still in `check_on_land` (since 13:58), slowed by a
+  backfill competing for CPU. **`prefetch_2024-07` died at 13:28** with no traceback while cleaning
+  2024-07-09 (26.5M raw rows); the Windows logs show no application crash or low-memory event, so
+  the cause is unknown. It left a truncated clean 2024-07-09 (deleted; its raw file is complete
+  and on disk, manifest `raw_only`, so the next backfill re-cleans it). 2024-07-01..07-08 clean.
+- **Cleaning is now ~20x faster (commit 136adb3):** `process.clean` ran the dedup twice (count,
+  then COPY) and numbered rows with `row_number() OVER ()` (a serial pass); now it dedups once by
+  the reader's `file_row_number` and counts from the written file. Real 2024-07-09: 101 s -> 5 s,
+  identical rows (EXCEPT ALL both ways = 0) and schema. Both `process.clean` and
+  `ingest.dma._csv_to_parquet` now write to `part-0.parquet.tmp` and rename, so a killed process
+  can no longer leave a truncated partition that later runs skip as done.
+- **Background downloads restarted with the new code at 15:38 (WMI):** the old
+  `prefetch_2024-12` (old slow clean, hogging CPU) was stopped by PID after 2025-01-14 (it left a
+  truncated raw 2025-01-15, deleted). Now running: `prefetch2_summer` 2024-07-09..10-01 and
+  `prefetch2_winter` 2025-01-15..02-26, logs `outputs/logs/prefetch2_*.log`, START/OK/FAIL lines
+  in the same status file. The build script's own `wait`s refer to the old (dead) prefetches, so
+  the July and December windows no longer wait: the July window must not start before
+  `prefetch2_summer` has finished July -- it won't (April+May+June detectors come first, hours),
+  but check the status file if timings change.
 - **Killed again at ~11:41 (5 min after the 11:36 WMI launch), no error, no reboot.** WMI-launched
   processes are verified NOT to be in a job object (`IsProcessInJob` = False), so the WMI launch
   itself is fine. At the same time the other agent finished a ~10 min test of its live relay

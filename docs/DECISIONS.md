@@ -1878,3 +1878,11 @@ _2026-09-28_ (P5-9: the shadow-fleet page and share cards, author's pick)
   are git-ignored like the data they draw.
 - **Visitor stats wait for the author.** The wrangler login cannot create a Web Analytics site
   (API auth error). The zone's own traffic analytics already work without it.
+- **`process.clean` dedups once, by `file_row_number`, and writes atomically.** It ran the Rule 3
+  window function twice (a `count(*)` over the view, then the `COPY`), and numbered rows with
+  `row_number() OVER ()`, a serial pass over the whole day. Now the raw view reads
+  `file_row_number` (the row's position in the file -- the "file order" Rule 3 always meant) and the
+  count comes from the written file. Real 2024-07-09 (26.5M raw rows): 101 s -> 5 s, identical rows
+  both ways and identical schema. `process.clean` and `ingest.dma._csv_to_parquet` now write a
+  `.tmp` sibling and `os.replace` it: shutdowns and kills had left truncated partitions (2024-03-21
+  raw, 2024-07-09 clean, 2025-01-15 raw) that the "already done" checks would skip for good.
