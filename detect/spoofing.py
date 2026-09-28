@@ -159,6 +159,12 @@ BBOX_OUTLIER_QUANTILE = 0.001
 # of magnitude finer than COASTAL_EROSION_DEG, so it does not meaningfully change which points are
 # flagged, only how many vertices ST_Contains has to test against.
 LAND_SIMPLIFY_TOLERANCE_DEG = 0.001
+# The eroded land pieces are split into grid cells this size before the containment join, so each
+# point is tested only against the few vertices of its own cell -- see check_on_land's docstring.
+LAND_GRID_CELL_DEG = 0.1
+# Neighbouring cells overlap by this much, so a point lying exactly on a grid line is still strictly
+# inside one cell's piece (ST_Contains excludes the boundary); SELECT DISTINCT drops the duplicate.
+LAND_GRID_OVERLAP_DEG = 1e-6
 
 # Days run one at a time: each day's join already keeps ~12 of 16 threads busy inside DuckDB, and
 # concurrent cursors only contend. Measured 2026-09-28 on 4 May-2024 days, identical events:
@@ -314,6 +320,17 @@ def check_on_land(
     by a small amount** (286,440 vs. the pre-fix 277,788 on 2024-06-05, +3.1%) from processing-order
     differences in how adjoining Natural-Earth pieces are cropped and eroded -- within the noise of
     an already-unvalidated heuristic (see below), not chased to exact parity.
+
+    **A fifth fix (2026-09-28): the eroded pieces are split into a :data:`LAND_GRID_CELL_DEG` grid
+    before the join.** ``SPATIAL_JOIN`` only prunes by bounding box, and a large piece (Jutland,
+    southern Sweden) has a box covering most of the nearby sea, so nearly every point still paid a
+    full ``ST_Contains`` against thousands of vertices. In a long-running build the spatial
+    extension's per-test allocations also serialized on the Windows heap lock (py-spy: the worker
+    waiting in ``RtlAllocateHeap``), so April 2024 ran at ~1.7 cores for over 3 hours. Split into
+    0.1-degree cells (73 pieces -> 3,538, at most 32 vertices each), one day drops from 44-63s to
+    1.1-1.6s, with **identical rows** (0 missing, 0 extra) on five real days across April, June and
+    November 2024. Cells overlap by :data:`LAND_GRID_OVERLAP_DEG` so a point exactly on a grid line
+    is still strictly inside one cell's piece.
     """
     lat_min, lat_max, lon_min, lon_max = con.execute(
         "SELECT quantile_cont(latitude, ?), quantile_cont(latitude, ?), "
@@ -330,16 +347,33 @@ def check_on_land(
         f"POLYGON(({lon_min - m} {lat_min - m}, {lon_max + m} {lat_min - m}, "
         f"{lon_max + m} {lat_max + m}, {lon_min - m} {lat_max + m}, {lon_min - m} {lat_min - m}))"
     )
-    # A regular (not TEMP) table: cursor()-derived connections used by the thread pool below do
-    # not see the parent connection's TEMP tables (confirmed empirically), only the shared catalog.
     con.execute(
-        "CREATE OR REPLACE TABLE _land_pieces AS "
+        "CREATE OR REPLACE TEMP TABLE _land_eroded AS "
         "SELECT ST_SimplifyPreserveTopology(ST_Buffer(piece, ?), ?) AS geom FROM ("
         "  SELECT ST_Intersection((UNNEST(ST_Dump(geom))).geom, ST_GeomFromText(?)) AS piece "
         "  FROM read_parquet(?)"
         ") WHERE NOT ST_IsEmpty(piece)",
         [-COASTAL_EROSION_DEG, LAND_SIMPLIFY_TOLERANCE_DEG, bbox_wkt, str(land_path)],
     )
+    cell, eps = LAND_GRID_CELL_DEG, LAND_GRID_OVERLAP_DEG
+    n_cols = int((lon_max - lon_min + 2 * m) / cell) + 1
+    n_rows = int((lat_max - lat_min + 2 * m) / cell) + 1
+    # A regular (not TEMP) table: cursor()-derived connections used by the thread pool below do
+    # not see the parent connection's TEMP tables (confirmed empirically), only the shared catalog.
+    con.execute(
+        "CREATE OR REPLACE TABLE _land_pieces AS "
+        "SELECT geom FROM ("
+        "  SELECT ST_Intersection(l.geom, g.cell) AS geom "
+        "  FROM _land_eroded l JOIN ("
+        "    SELECT ST_MakeEnvelope(x - ?, y - ?, x + ? + ?, y + ? + ?) AS cell FROM ("
+        "      SELECT ? + i * ? AS x, ? + j * ? AS y FROM range(?) t1(i), range(?) t2(j)"
+        "    )"
+        "  ) g ON ST_Intersects(l.geom, g.cell)"
+        ") WHERE NOT ST_IsEmpty(geom)",
+        [eps, eps, cell, eps, cell, eps,
+         lon_min - m, cell, lat_min - m, cell, n_cols, n_rows],
+    )
+    con.execute("DROP TABLE _land_eroded")
 
     def _query_day(path: Path) -> list[tuple]:
         # con.cursor(): an independent connection sharing this database, safe to use
