@@ -3,13 +3,15 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 const STYLE_URL = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
+// Land sits clearly above the sea (author's call 2026-09-28: the first navy land was too close to
+// the water to tell apart); the sea stays near-black so tracks and density read on it.
 export const PALETTE = {
   water: '#050b15',
-  land: '#0d1624',
-  landAlt: '#0b1320',
-  border: 'rgba(140, 160, 190, 0.28)',
-  label: '#7f8ca3',
-  labelStrong: '#b3bfd1',
+  land: '#1c2839',
+  landAlt: '#1a2536',
+  border: 'rgba(160, 180, 210, 0.38)',
+  label: '#8d9ab1',
+  labelStrong: '#c3cddc',
   halo: '#050b15',
   road: 'rgba(120, 135, 160, 0.35)',
 };
