@@ -2421,3 +2421,15 @@ _2026-09-29_ (P4-3h: built; March threshold frozen; GFW validation pending)
 - **GFW validation gate: pending** until `data/reference/gfw/port_visits.parquet` lands. The
   gate line catches every tanker crossing 14.0 E between 54.3 and 56.0 N, so "eastern Baltic" is
   broad (Polish, Baltic-state, Finnish and Swedish ports too) -- the gate decides the name.
+
+_2026-09-29_ (P4-3h result: the Baltic round-trip columns add nothing -- not adopted)
+
+- **Run** before P4-11 was ready, so on the static columns alone (a disclosed extra
+  configuration; the pre-registration put P4-3h on top of the adopted P4-11/P4-12 columns):
+  `--labels v2 --feature-set baltic=baltic`, dev_clean (`outputs/wf_dev_clean_v2_baltic.txt`).
+- **k=50 [0.417]:** baltic_pu_lightgbm 0.266 vs the bar static_pu_lightgbm 0.277 (-0.011
+  [-0.043, +0.023]); baltic_lightgbm 0.237 vs static_lightgbm 0.243. k=25: 0.394 vs 0.417; k=100:
+  0.171 vs 0.164; R2's budget 0.083 vs 0.081. All intervals include 0.
+- **Decision: not adopted** (lower dev P@50). The GFW validation of the trips' destination is
+  still run when P4-11 lands, for the record, but does not reopen this.
+- **Configurations tried on dev_clean: 5** (ens, PU, hazard, baltic x 2 recipes).
