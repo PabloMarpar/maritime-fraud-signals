@@ -456,6 +456,11 @@ def score_cutoff(
         xte = test_matrix(test, cols)
         scores[f"{name}_lightgbm"] = lightgbm_scores(xtr, ytr, xte)
         scores[f"{name}_pu_lightgbm"] = pu_bagging_scores(xtr, ytr, xte)
+        if use_tabicl:
+            # P4-13's end-of-line rerun on a feature set: TabICLv2 on the same columns, and the
+            # rank ensemble with the adopted recipe (PU LightGBM).
+            scores[f"{name}_tabicl"] = tabicl_scores(xtr, ytr, xte)
+            scores[f"{name}_ens"] = rank_mean(scores[f"{name}_pu_lightgbm"], scores[f"{name}_tabicl"])
     if cutoff >= ENCODER_FIRST_CUTOFF and all(EMB_COLUMNS[0] in w.split.features for w in windows):
         scores.update(encoder_scores(windows, test, use_tabicl))
     return scores, info
@@ -690,7 +695,8 @@ def run_walk_forward(
         "lgbm_detectors_context", "lgbm_detectors_context_noexp", "rule_tanker_dest",
         "enc_logistic", "enc_lightgbm", "enc_tabicl", "emb_logistic",
         *P4_13_MODELS,
-        *(f"{n}_{r}" for n in (feature_sets or {}) for r in ("lightgbm", "pu_lightgbm")),
+        *(f"{n}_{r}" for n in (feature_sets or {})
+          for r in ("lightgbm", "pu_lightgbm", "tabicl", "ens")),
     ]
     models = [m for m in models if any(m in c.scores for c in cut_all)]
     comparisons = [(m, "r2") for m in models if m not in ("r2", "rule_tanker_dest")]
@@ -706,6 +712,8 @@ def run_walk_forward(
                         (f"{n}_lightgbm", "static_lightgbm")]
         # A later set against each earlier one (e.g. ports+hist vs ports, the current bar).
         comparisons += [(f"{n}_pu_lightgbm", f"{m}_pu_lightgbm") for m in sets[:i]]
+        comparisons += [(f"{n}_{r}", f"{n}_pu_lightgbm") for r in ("tabicl", "ens")
+                        if f"{n}_{r}" in models]
     # P4-3j, pre-registered: does the embedding add anything to each static recipe?
     for enc, base in (("enc_logistic", "static_logistic"), ("enc_lightgbm", "static_lightgbm"),
                       ("enc_tabicl", "tabicl")):

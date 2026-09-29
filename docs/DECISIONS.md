@@ -2480,3 +2480,12 @@ _2026-09-29_ (P4-12 result: history columns adopted)
 - **Decision (amended rule 3): adopted.** New bar: **ports_hist_pu_lightgbm, 0.317 at k=50.**
 - **Configurations tried on dev_clean: 9** (+ ports_hist x 2 recipes; the `ports` rerun inside
   this run is a replicate, identical to its earlier numbers, not a new configuration).
+
+_2026-09-29_ (P4-13 end-of-line rerun on the final feature set -- specified before running)
+
+- Final feature set = STATIC + ports + hist. Per P4-13's pre-registration the model-side variants
+  are rerun on it. PU and hazard need no rerun (PU is already the adopted recipe; hazard is not
+  evaluable on this archive). So: `ports_hist_tabicl` (TabICLv2, P4-3i's recipe, on the final
+  columns) and `ports_hist_ens` (rank mean of `ports_hist_pu_lightgbm` and `ports_hist_tabicl`,
+  i.e. P4-13's ensemble with the adopted recipe in place of plain LightGBM). Each is compared with
+  the bar `ports_hist_pu_lightgbm` on dev_clean. 2 more configurations.
