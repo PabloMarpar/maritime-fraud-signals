@@ -90,3 +90,12 @@ def test_pretraining_smoke_runs_and_embeds():
     assert len(log) >= 1 and np.isfinite(log[-1]["val_total"])
     emb = ve.embed(model, months, std, "cpu")
     assert emb.shape == (len(months), ve.EMB_DIM) and np.isfinite(emb).all()
+
+
+def test_diagnostic_helpers():
+    from model.encoder_diagnostics import effective_rank, retrieval_ranks
+
+    rng = np.random.default_rng(0)
+    assert effective_rank(rng.normal(size=(5000, 16))) == pytest.approx(16, abs=0.5)
+    x = rng.normal(size=(50, 16))
+    assert (retrieval_ranks(x, x + 1e-3 * rng.normal(size=x.shape)) == 0).all()
