@@ -114,11 +114,16 @@ SEED = 0
 @dataclass
 class Window:
     """One built window's modelling population: the panel split plus the static columns, the
-    IMO (bootstrap cluster key) and the designation package (secondary cluster key)."""
+    IMO (bootstrap cluster key) and the designation package (secondary cluster key).
+
+    ``panel_columns`` are the panel's own feature columns, recorded BEFORE the static columns are
+    added to ``split.features``: P4-3's detector variants must only ever see these (the first
+    run, 97f0661, leaked the static columns into them -- see docs/DECISIONS.md 2026-09-29)."""
 
     split: Split
     imo: np.ndarray
     package: np.ndarray
+    panel_columns: frozenset[str]
 
     @property
     def start(self) -> date:
@@ -175,12 +180,14 @@ def load_window(panel_path: Path, static_path: Path, matches_path: Path) -> Wind
         con.close()
     if not np.array_equal(np.asarray(data["mmsi"]), split.mmsi):
         raise ValueError(f"{panel_path}: static join changed the row set or order")
+    panel_columns = frozenset(split.features)
     for c in ("imo_serial", *_FROM_STATIC_TABLE):
         split.features[c] = np.ma.filled(np.ma.asarray(data[c]).astype(float), np.nan)
     return Window(
         split=split,
         imo=np.asarray(data["imo"]).astype(str),
         package=np.asarray(data["package"]).astype(str),
+        panel_columns=panel_columns,
     )
 
 
@@ -269,10 +276,13 @@ def secondary_labels(split: Split, horizon_days: int = SECONDARY_HORIZON_DAYS) -
 
 
 def detector_columns(windows: Sequence[Window], variant: str) -> list[str]:
-    """P4-3's variant columns, restricted to those present in every window. The no-exposure
-    variant is ``detectors_context`` minus :data:`EXPOSURE_COLUMNS`."""
+    """P4-3's variant columns: panel columns only (never the static ones), restricted to those
+    present in every window. The no-exposure variant is ``detectors_context`` minus
+    :data:`EXPOSURE_COLUMNS`."""
     base = "detectors_context" if variant == "detectors_context_noexp" else variant
-    common = set.intersection(*(set(columns_for(base, w.split)) for w in windows))
+    common = set.intersection(
+        *(set(columns_for(base, w.split)) & w.panel_columns for w in windows)
+    )
     cols = [c for c in columns_for(base, windows[-1].split) if c in common]
     if variant == "detectors_context_noexp":
         cols = [c for c in cols if c not in EXPOSURE_COLUMNS]
@@ -350,7 +360,7 @@ def _report(
             vals = []
             for c in cutoffs_all:
                 if m not in c.scores:
-                    vals.append(f"{'--':>9s}")
+                    vals.append(f"{'n/s':>9s}")
                     continue
                 p = per_cutoff_precision([c], m, budget)[0]["precision"]
                 vals.append(f"{_fmt(p):>9s}")
@@ -394,7 +404,8 @@ def _report(
             )
     lines += [
         "",
-        "Notes: rule_tanker_dest is descriptive only (not a pre-registered variant). Scores are",
+        "Notes: n/s = not scorable (no training positive before that cutoff).",
+        "rule_tanker_dest is descriptive only (not a pre-registered variant). Scores are",
         "rankings, not probabilities. Positives are vessels on the 2026-09-21 sanctions snapshot.",
     ]
     return "\n".join(lines) + "\n"

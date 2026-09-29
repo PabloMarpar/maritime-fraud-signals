@@ -40,7 +40,12 @@ def _window(start: date, end: date, desig: list[str | None], feature: list[float
         window_end=end,
         designation_date=d,
     )
-    return Window(split=split, imo=np.array([str(i) for i in range(n)]), package=np.array([""] * n))
+    return Window(
+        split=split,
+        imo=np.array([str(i) for i in range(n)]),
+        package=np.array([""] * n),
+        panel_columns=frozenset(split.features),
+    )
 
 
 APR = _window(date(2024, 4, 1), date(2024, 4, 30), ["2024-05-10", "2024-09-01", None], [1, 2, 3])
@@ -132,20 +137,41 @@ def test_logistic_ranks_the_separating_feature():
     assert s[0] > s[1]
 
 
-def test_noexp_variant_drops_exactly_the_exposure_columns():
-    feats = {
-        "n_gaps": np.zeros(1),
-        "n_observed_hours": np.zeros(1),
-        "voyage_count": np.zeros(1),
-        "is_tanker": np.zeros(1),
-        "is_foc": np.zeros(1),
-    }
+def _panel_window_with_static_columns() -> Window:
+    """A window as load_window leaves it: panel columns recorded, then static columns added to
+    the same features dict."""
     w = _window(date(2024, 6, 1), date(2024, 6, 30), [None], [0])
     w.split.features.clear()
-    w.split.features.update(feats)
+    w.split.features.update(
+        {
+            "n_gaps": np.zeros(1),
+            "n_observed_hours": np.zeros(1),
+            "voyage_count": np.zeros(1),
+            "is_tanker": np.zeros(1),
+            "is_foc": np.zeros(1),
+        }
+    )
+    w = Window(w.split, w.imo, w.package, panel_columns=frozenset(w.split.features))
+    for c in ("imo_serial", "length_m", "dest_russia"):
+        w.split.features[c] = np.zeros(1)
+    return w
+
+
+def test_noexp_variant_drops_exactly_the_exposure_columns():
+    w = _panel_window_with_static_columns()
     full = detector_columns([w], "detectors_context")
     noexp = detector_columns([w], "detectors_context_noexp")
     assert set(full) - set(noexp) == {"n_observed_hours", "voyage_count"}
+
+
+@pytest.mark.parametrize(
+    "variant", ["detectors", "detectors_context", "detectors_context_noexp"]
+)
+def test_detector_variants_never_see_the_static_columns(variant):
+    # Regression: the first real run (97f0661) fed imo_serial/length/destination into these.
+    cols = detector_columns([_panel_window_with_static_columns()], variant)
+    assert not {"imo_serial", "length_m", "dest_russia"} & set(cols)
+    assert "n_gaps" in cols
 
 
 def test_window_dirs_skip_the_short_validation_window(tmp_path):
