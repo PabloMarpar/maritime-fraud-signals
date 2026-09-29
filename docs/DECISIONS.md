@@ -2433,3 +2433,21 @@ _2026-09-29_ (P4-3h result: the Baltic round-trip columns add nothing -- not ado
 - **Decision: not adopted** (lower dev P@50). The GFW validation of the trips' destination is
   still run when P4-11 lands, for the record, but does not reopen this.
 - **Configurations tried on dev_clean: 5** (ens, PU, hazard, baltic x 2 recipes).
+
+_2026-09-29_ (P4-11: GFW port visits landed; coverage gate GO)
+
+- **Built.** `ingest/gfw_port_visits.py`: 11,944 IMOs queried, 11,939 resolved (99.96%), 25,261
+  GFW vessel ids (~2.5 min, 8 workers); 1,833,517 port-visit events (GFW serves full history;
+  the feature step filters by date), ~68 min. Two real issues fixed on the way: `/v3/events`
+  accepts at most 20 vessel ids per call (undocumented; 21 -> 422), and tz-aware UTC timestamps
+  were silently shifted to local time by the DuckDB driver (now parsed as naive UTC, with exact
+  `end == window_end` boundary tests). `features/port_visits.py` -> `data/processed/port_visits/`.
+- **Matched RUS oil-terminal anchorages (12 of 14):** DE KASTRI, KAVKAZ, KOZMINO, MURMANSK,
+  NAKHODKA, NOVOROSSIYSK, PRIMORSK, SABETTA, SAINT PETERSBURG, TUAPSE, UST LUGA, VYSOTSK. SHESKHARIS
+  and TAMAN never occur as anchorage names (147 distinct RUS names in all).
+- **Interpretations of the spec, documented in the module:** `pv_n_sanctioned_states` counts
+  distinct states (0-4), not visits; `pv_share_south` = 0 for a resolved vessel with no visits.
+- **Coverage gate (non-sealed IMOs, v2 labels, forward-positive 321 vs never-sanctioned 5,827):**
+  resolved 1.000 vs 0.999 (+0.001 [+0.000, +0.001]); any port visit 2023-06..2025-02 0.984 vs
+  0.986 (-0.002 [-0.016, +0.010]). Both well inside 5 points -> **GO**. Unlike Wikidata build
+  years, GFW coverage does not depend on the label.
