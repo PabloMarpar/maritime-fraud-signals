@@ -2405,3 +2405,19 @@ _2026-09-29_ (P4-9: the bar re-measured under v2 labels, dev_clean)
   configuration (count stays 3).
 - Report-header bug fixed (the `labels` argument was shadowed by the per-cutoff label array; the
   header printed the array, the numbers were unaffected).
+
+_2026-09-29_ (P4-3h: built; March threshold frozen; GFW validation pending)
+
+- **Built.** `detect/baltic_trips.py` -> `data/detect/baltic_trips/part-0.parquet` (all trips,
+  not window-partitioned: a trip is a cross-time fact); `features/baltic_trips.py` ->
+  `data/processed/baltic_trips/window=*/`. Crossings from 5-min thin tracks (April on) and clean
+  data (March); draught always from clean data. Roster = `process.identity` x `process.ship_type`,
+  as in `features.panel`; March mmsi->imo from April's identity table.
+- **March 2024 threshold:** 316 round trips; smoothed 20-bin histogram of relative draught change
+  is bimodal (modes -0.207 and +0.327), valley at **0.1133** -> `LADEN_RETURN_THRESHOLD`. Frozen
+  before any window's feature was built.
+- **Full archive:** 11,447 crossings, 5,137 round trips (none dropped for missing draught), 2,362
+  laden returns (46%). ~90 s.
+- **GFW validation gate: pending** until `data/reference/gfw/port_visits.parquet` lands. The
+  gate line catches every tanker crossing 14.0 E between 54.3 and 56.0 N, so "eastern Baltic" is
+  broad (Polish, Baltic-state, Finnish and Swedish ports too) -- the gate decides the name.
