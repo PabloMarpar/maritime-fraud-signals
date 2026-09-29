@@ -53,6 +53,7 @@ from pathlib import Path
 import duckdb
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
@@ -107,6 +108,12 @@ LOGISTIC_MAX_ITER = 5000
 TABICL_CHECKPOINT = "tabicl-classifier-v2-20260212.ckpt"
 TABICL_N_NEGATIVES = 5000
 TABICL_SEEDS = tuple(range(10))
+
+# P4-13 (docs/DECISIONS.md 2026-09-29).
+PU_N_BAGS = 50
+PU_UNLABELED_RATIO = 5
+HAZARD_HORIZON_DAYS = 182
+P4_13_MODELS = ("ens_lgbm_tabicl", "static_pu_lightgbm", "static_hazard_lightgbm")
 
 PRIMARY_FIRST_CUTOFF = date(2024, 8, 1)
 # P4-3j: the vessel encoder was pretrained on 2024-04..07, so its embeddings are scored only from
@@ -291,6 +298,55 @@ def tabicl_scores(
     return np.mean(out, axis=0)
 
 
+def pu_bagging_scores(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_test: np.ndarray,
+    n_bags: int = PU_N_BAGS,
+    ratio: int = PU_UNLABELED_RATIO,
+) -> np.ndarray:
+    """P4-13 bagging PU: each bag is every positive plus `ratio` times as many non-positives
+    drawn without replacement (all if fewer); mean P over bags, LightGBM seed = bag index."""
+    pos = np.flatnonzero(y_train)
+    unl = np.flatnonzero(~y_train)
+    n_u = min(len(unl), ratio * len(pos))
+    out = []
+    for b in range(n_bags):
+        rng = np.random.default_rng([SEED, b])
+        idx = np.sort(np.concatenate([pos, rng.choice(unl, n_u, replace=False)]))
+        out.append(fit_model(x_train[idx], y_train[idx], b).predict_proba(x_test)[:, 1])
+    return np.mean(out, axis=0)
+
+
+def hazard_training_set(
+    windows: Sequence[Window], cutoff: date, columns: Sequence[str],
+    horizon_days: int = HAZARD_HORIZON_DAYS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """P4-13's hazard framing: a row of window w is positive iff designated in
+    (w.end, w.end + horizon] and before `cutoff`; a non-positive row is kept only when its whole
+    horizon ends before `cutoff` (otherwise it is censored and dropped)."""
+    c = np.datetime64(cutoff, "D")
+    xs, ys = [], []
+    for w in (w for w in windows if w.end < cutoff):
+        end = np.datetime64(w.end, "D")
+        horizon_end = end + np.timedelta64(horizon_days, "D")
+        d = w.split.designation_date
+        known = ~np.isnat(d)
+        pos = np.zeros(len(d), dtype=bool)
+        pos[known] = (d[known] > end) & (d[known] <= horizon_end) & (d[known] < c)
+        keep = pos | (horizon_end < c)
+        xs.append(np.column_stack([w.split.features[k] for k in columns])[keep])
+        ys.append(pos[keep])
+    if not xs:
+        return np.empty((0, len(columns))), np.empty(0, dtype=bool)
+    return np.vstack(xs), np.concatenate(ys)
+
+
+def rank_mean(*scores: np.ndarray) -> np.ndarray:
+    """Mean of percentile ranks (average ranks for ties) -- P4-13's ensemble."""
+    return np.mean([rankdata(s) / len(s) for s in scores], axis=0)
+
+
 def secondary_labels(split: Split, horizon_days: int = SECONDARY_HORIZON_DAYS) -> np.ndarray:
     """Designated within `horizon_days` after the window's end."""
     d = split.designation_date
@@ -339,12 +395,17 @@ def score_cutoff(
     x_test = test_matrix(test, STATIC_COLUMNS)
     scores["static_logistic"] = logistic_scores(x_train, y_train, x_test)
     scores["static_lightgbm"] = lightgbm_scores(x_train, y_train, x_test)
+    scores["static_pu_lightgbm"] = pu_bagging_scores(x_train, y_train, x_test)
+    xh, yh = hazard_training_set(windows, cutoff, STATIC_COLUMNS)
+    if yh.any() and (~yh).any():
+        scores["static_hazard_lightgbm"] = lightgbm_scores(xh, yh, x_test)
     for variant in ("context", "detectors", "detectors_context", "detectors_context_noexp"):
         cols = detector_columns(windows, variant)
         xtr, ytr = training_set(windows, cutoff, cols)
         scores[f"lgbm_{variant}"] = lightgbm_scores(xtr, ytr, test_matrix(test, cols))
     if use_tabicl:
         scores["tabicl"] = tabicl_scores(x_train, y_train, x_test)
+        scores["ens_lgbm_tabicl"] = rank_mean(scores["static_lightgbm"], scores["tabicl"])
     if cutoff >= ENCODER_FIRST_CUTOFF and all(EMB_COLUMNS[0] in w.split.features for w in windows):
         scores.update(encoder_scores(windows, test, use_tabicl))
     return scores, info
@@ -555,12 +616,15 @@ def run_walk_forward(
         "r2", "static_logistic", "static_lightgbm", "tabicl", "lgbm_context", "lgbm_detectors",
         "lgbm_detectors_context", "lgbm_detectors_context_noexp", "rule_tanker_dest",
         "enc_logistic", "enc_lightgbm", "enc_tabicl", "emb_logistic",
+        *P4_13_MODELS,
     ]
     models = [m for m in models if any(m in c.scores for c in cut_all)]
     comparisons = [(m, "r2") for m in models if m not in ("r2", "rule_tanker_dest")]
     if "tabicl" in models:
         comparisons.append(("tabicl", "static_logistic"))
     comparisons.append(("static_lightgbm", "static_logistic"))
+    # P4-13, pre-registered: each model-side variant against the current best static model.
+    comparisons += [(m, "static_lightgbm") for m in P4_13_MODELS if m in models]
     # P4-3j, pre-registered: does the embedding add anything to each static recipe?
     for enc, base in (("enc_logistic", "static_logistic"), ("enc_lightgbm", "static_lightgbm"),
                       ("enc_tabicl", "tabicl")):

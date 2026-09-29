@@ -2344,3 +2344,29 @@ crossing is computed)
   (the lookback length varies for early windows). knowable_at = the westbound crossing time.
 - **Variants:** `draught_lightgbm` = static recipe on STATIC_COLUMNS + the adopted P4-11/P4-12
   columns + these. Decision per amended rule 3.
+
+_2026-09-29_ (P4-13 first run: static columns, v1 labels, dev_clean)
+
+- **Run.** `python -m model.walk_forward --scope dev_clean --no-embeddings` with the three
+  pre-registered variants. Pooled dev_clean precision (ceiling), difference vs `static_lightgbm`
+  with its IMO-clustered 95% interval:
+  - k=50 [0.331]: static_lightgbm 0.226; **static_pu_lightgbm 0.246 (+0.020 [+0.000,
+    +0.046])**; ens_lgbm_tabicl 0.223 (-0.003 [-0.029, +0.023]).
+  - k=25 [0.663]: 0.314; PU 0.394 (+0.080 [+0.011, +0.097]); ens 0.343 (+0.029, n.s.).
+  - k=100 [0.166]: 0.133; PU 0.143 (+0.010 [+0.001, +0.020]); ens 0.140 (+0.007 [+0.001,
+    +0.016]).
+  - R2's budget [0.070]: all 0.065-0.066, indistinguishable.
+  PU's gain comes from the early cutoffs, where positives are fewest (Aug 0.36 vs 0.28, Sep 0.34
+  vs 0.26 at k=50; equal from November on).
+- **`static_hazard_lightgbm` is not evaluable as pre-registered:** a non-positive row needs its
+  whole 182-day horizon before the cutoff, and the archive starts in April 2024, so no negatives
+  exist before the 2024-11 cutoff and Aug-Oct are "not scorable". My design flaw, noticed only on
+  running. Descriptive only, Nov-Feb at k=50: 0.000/0.260/0.280/0.240 vs static_lightgbm's
+  0.000/0.260/0.260/0.240 -- no gain. Dropped; not rerun with a shorter horizon (that would be a
+  new configuration chosen after seeing this one).
+- **Decision (amended rule 3):** PU raises dev P@50 without lowering precision at R2's budget ->
+  **adopted; the bar is now static_pu_lightgbm, 0.246 at k=50.** The ensemble is not adopted.
+  Consequence for P4-11/P4-12/P4-3h: each new feature set is run with BOTH the LightGBM and the PU
+  recipe (`<set>_lightgbm`, `<set>_pu_lightgbm`), and judged against the current bar. This adds
+  one configuration per feature set, disclosed here.
+- **Configurations tried on dev_clean so far: 3** (ens, PU, hazard).

@@ -260,3 +260,48 @@ def test_sealed_scopes_refuse_to_run_without_unseal(scope, tmp_path):
 
     with pytest.raises(ValueError, match="unseal"):
         run_walk_forward(panel_root=tmp_path, scope=scope)
+
+
+def test_hazard_label_uses_the_horizon_and_drops_censored_rows():
+    from model.walk_forward import hazard_training_set
+
+    # APR ends 2024-04-30: horizon end 2024-10-29. Designations 2024-05-10 (inside), 2024-09-01
+    # (inside), None (negative). MAY ends 2024-05-31: horizon end 2024-11-29.
+    x, y = hazard_training_set([APR, MAY, JUN], date(2024, 12, 1), ["f"], horizon_days=182)
+    assert dict(zip(x[:, 0].tolist(), y.tolist())) == {1: True, 2: True, 3: False, 4: True, 5: False}
+    # At cutoff 2024-10-01 APR's horizon is not fully observed: the positive designated before the
+    # cutoff stays, 2024-09-01 too, and the never-designated row is censored (dropped).
+    x, y = hazard_training_set([APR], date(2024, 10, 1), ["f"], horizon_days=182)
+    assert x[:, 0].tolist() == [1, 2] and y.tolist() == [True, True]
+    # A designation after the cutoff is never a positive.
+    x, y = hazard_training_set([APR], date(2024, 8, 1), ["f"], horizon_days=182)
+    assert x[:, 0].tolist() == [1] and y.tolist() == [True]
+
+
+def test_pu_bags_keep_every_positive_and_score_every_test_row(monkeypatch):
+    import model.walk_forward as wf
+
+    seen = []
+
+    class _Fake:
+        def predict_proba(self, x):
+            return np.column_stack([1 - x[:, 0] / 10, x[:, 0] / 10])
+
+    def fake_fit(x, y, seed):
+        seen.append((int(y.sum()), len(y)))
+        return _Fake()
+
+    monkeypatch.setattr(wf, "fit_model", fake_fit)
+    y = np.array([True, True] + [False] * 30)
+    x = np.arange(32, dtype=float)[:, None]
+    out = wf.pu_bagging_scores(x, y, np.array([[1.0], [5.0]]), n_bags=4, ratio=5)
+    assert seen == [(2, 12)] * 4
+    assert out.tolist() == [0.1, 0.5]
+
+
+def test_rank_mean_averages_percentile_ranks():
+    from model.walk_forward import rank_mean
+
+    assert rank_mean(np.array([3.0, 1.0, 2.0]), np.array([0.1, 0.3, 0.2])).tolist() == [
+        pytest.approx(2 / 3), pytest.approx(2 / 3), pytest.approx(2 / 3)
+    ]
