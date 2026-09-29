@@ -2466,3 +2466,17 @@ _2026-09-29_ (P4-11 result: port visits adopted)
 - **Decision (amended rule 3): adopted.** New bar: **ports_pu_lightgbm, 0.297 at k=50.** P4-12 is
   run on STATIC + ports + hist, as pre-registered.
 - **Configurations tried on dev_clean: 7** (+ ports x 2 recipes).
+
+_2026-09-29_ (P4-12 result: history columns adopted)
+
+- **Built.** `features/history.py` -> `data/processed/history/window=*/` (11 windows, ~1.6 s). "Madeira"
+  (an ITF registry with no ISO3 of its own) is left out of the FOC->ISO3 map, guard-tested; a
+  resolved IMO with no segment before window_end gets 0 counts and NaN ages.
+- **Run.** `--labels v2 --feature-set ports=ports --feature-set ports_hist=ports+hist`, dev_clean
+  (`outputs/wf_dev_clean_v2_hist.txt`).
+- **Pooled dev_clean, ports_hist_pu_lightgbm vs the bar ports_pu_lightgbm:** k=50 [0.417]
+  **0.317 vs 0.297 (+0.020 [-0.011, +0.051])**; k=25 0.491 vs 0.429 (+0.063 [+0.000, +0.126]);
+  k=100 0.184 vs 0.183; R2's budget 0.085 vs 0.085 (+0.000 [-0.001, +0.002]).
+- **Decision (amended rule 3): adopted.** New bar: **ports_hist_pu_lightgbm, 0.317 at k=50.**
+- **Configurations tried on dev_clean: 9** (+ ports_hist x 2 recipes; the `ports` rerun inside
+  this run is a replicate, identical to its earlier numbers, not a new configuration).
