@@ -2219,3 +2219,39 @@ _2026-09-29_ (P4-10 amendment, before any new attempt was scored: decide on `dev
   over the same non-examined IMOs, so `dev_clean` is an exchangeable preview of `sealed`; its cost
   is size (58 forward-positive IMOs under v1). `dev` is still reported, as secondary. Everything
   else in P4-10 stands.
+
+_2026-09-29_ (P4-11: GFW port visits -- pre-registered before any port visit is fetched in bulk)
+
+- **Source.** GFW API v3. IMO -> GFW vessel ids via `/v3/vessels/search` (`where=imo='<imo>'`,
+  `datasets[0]=public-global-vessel-identity:latest`; every `selfReportedInfo` id, since a ship
+  has several ids across MMSI/flag changes); port visits via `/v3/events`
+  (`datasets[0]=public-global-port-visits-events:latest`, `vessels[i]=<id>`), 2023-06-01..
+  2025-03-01. Probe: 5/5 sample IMOs resolved, one vessel's 72 visits in one 0.6 s call, each
+  with `startAnchorage.flag` (ISO3), anchorage name/id, confidence 2-4. (A scout reported 0%
+  resolution and no per-vessel filtering; both were wrong -- it omitted `datasets[0]`.)
+  Licence: GFW API data is non-commercial with attribution; nothing derived goes on the website
+  before the terms are checked.
+- **Coverage gate (G2-style, P4-1's lesson), before any model uses the features.** Resolution
+  rate (IMO found in GFW) and "any port visit found" rate, forward-positive vs never-sanctioned,
+  on non-sealed IMOs only. NO-GO if the rates differ by more than 5 points with a 95% interval
+  excluding 0 -- the same contamination that sank Wikidata build years. Result recorded here.
+- **Features** (per row = vessel x window, from visits with `end < window_end` and `end >=
+  window_end - 270 days`; 270 days is the longest lookback the first window allows, since data
+  starts 2023-06-01; confidence >= 3 only):
+  `gfw_resolved` (0/1), `pv_n_total`, `pv_n_rus`, `pv_any_rus`, `pv_n_rus_oil` (RUS anchorages
+  whose name matches, case-insensitive, one of PRIMORSK, UST-LUGA/UST LUGA, VYSOTSK,
+  NOVOROSSIYSK, SHESKHARIS, TAMAN, TUAPSE, KAVKAZ, KOZMINO, NAKHODKA, DE-KASTRI/DE KASTRI,
+  MURMANSK, SABETTA, SAINT PETERSBURG/ST PETERSBURG -- the matched anchorage names are listed in
+  the result entry), `pv_days_since_rus` (capped at 270; 270 when none), `pv_share_south`
+  (share of visits in IND, TUR, CHN, ARE, EGY), `pv_n_sanctioned_states` (IRN, VEN, SYR, PRK).
+  Unresolved vessels get NaN for every `pv_*` column (training-median imputation, as for the
+  static columns) plus `gfw_resolved = 0`.
+- **Variants** (new names; the frozen P4-3c set is untouched): `ports_logistic`,
+  `ports_lightgbm`, `ports_tabicl` = the static recipes on STATIC_COLUMNS + the columns above.
+  Decision per P4-10's amended rule 3 (dev_clean, k=50, R2's budget alongside), against the
+  current best static model on dev_clean.
+- **Known risks.** GFW recomputes history with its current algorithms, so a 2024 visit as served
+  today is not exactly what was knowable in 2024 (the AIS underneath is). Shadow-fleet vessels
+  that go dark in Russian ports produce fewer visits, which works against the feature, not for
+  it. A Russian-terminal visit is close to the designation reason itself, like `dest_russia`
+  (README must say so).
