@@ -378,8 +378,8 @@ Unexplained process deaths during the build (2026-09-28) were never explained.
    0.189 (fragile win), static LightGBM 0.196, **TabICLv2 0.198** (robust), detectors alone 0.145
    (lose). At k=50: 0.178 vs 0.566 / 0.709 / 0.680. `analyst-review`: no temporal leak; one
    blocker found and fixed (static columns leaked into the detector variants).
-   **Open from that review:** the anchorage-mask glob (see Open questions) -- fix, rebuild
-   sts/behaviour/panels, rerun the walk-forward; affects only the lgbm_detectors* rows.
+   The review's anchorage-mask should-fix was fixed the same day (8363cd5), windows rebuilt,
+   walk-forward rerun: static/TabICL unchanged, detector variants within 0.005.
    PyTorch 2.11+cu128 and tabicl 2.2.0 are installed (GPU verified).
 3. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
    its pre-designation months, giving ~100 positives instead of 16. This also explains why adding
@@ -424,12 +424,11 @@ design, not model architecture.
 
 ## Open questions
 
-- **`pipeline/window.py` passes a `window=*` anchorage-mask glob to `detect.sts` and
-  `detect.behaviour`, read with no time filter** (found by `analyst-review` 2026-09-29). Windows
-  built after later masks existed (2024-04/05 with every mask; 2024-07..10 with November's) used
-  future AIS in their anchorage mask -- future data, not labels, and only the detector columns.
-  Fix: only masks with window_end <= the window's own; then rebuild sts, behaviour and panels for
-  the archive windows and rerun `model.walk_forward`.
+- **RESOLVED 2026-09-29 (8363cd5): the anchorage-mask glob read later windows' masks.** sts and
+  behaviour now keep masks with window_end <= their own window's; all 11 windows' sts/behaviour/
+  panels rebuilt and the walk-forward rerun (static/TabICL results unchanged, detector variants
+  moved by <= 0.005). June's and November's sts counts changed (1,689 -> 1,091, 502 -> 203): the
+  old figures elsewhere in this file describe the old build. See `docs/DECISIONS.md`.
 - **`detect/gaps.py`, `detect/spoofing.py` and `detect/behaviour.py` still default their voyages
   input to the `window=*` glob.** `voyage_seq` restarts at 1 per window, so `lead() OVER (PARTITION
   BY mmsi ORDER BY voyage_seq)` over the glob would pair voyages across windows. No current output

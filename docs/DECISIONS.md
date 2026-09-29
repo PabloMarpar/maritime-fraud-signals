@@ -2015,3 +2015,32 @@ _2026-09-29_ (P4-3b + P4-3i result: the walk-forward, 10 cutoffs, pooled 2024-08
   - **Notes:** 9 comparisons x 4 budgets with no multiplicity correction; CIs are conditional on
     one fit per cutoff (no training-row refit bootstrap); labels are effectively OFAC + UK (EU
     contributes 2 records), so EU-only vessels count as negatives.
+
+_2026-09-29_ (anchorage-mask fix, rebuild, walk-forward rerun -- closes the review's open should-fix)
+
+- **Fix (8363cd5).** `detect.sts.apply_structural_gates` and `detect.behaviour`'s anchorage
+  evidence keep only mask rows with `window_end <=` the window's own end, so the `window=*` mask
+  glob (kept on purpose: "every window built so far") can never lend a later window's AIS.
+  `pipeline.window` now passes this window's own voyages and sts partitions instead of globs:
+  the date filter alone did not stop the 2-day validation window inside June from duplicating
+  voyages (voyage_seq restarts per window). 3 new regression tests with controls; 611 pass.
+- **Rebuilt sts -> behaviour -> panel for all 11 windows.** A first parallel attempt (3 windows
+  at 5 threads / 6 GB `memory_limit` each) failed 4 sts windows: 2 out-of-memory, 2 with a DuckDB
+  "Date out of range in timestamp conversion" inside `segment_episodes` (before the changed
+  code) while spilling. Rerun one at a time without a memory cap: all OK. **Do not cap sts at
+  6 GB for a monthly window.**
+- **What changed (sts events / draught_change_unexplained):** April 283 -> 1,616 / 696 -> 802 and
+  May 828 -> 1,845 / 812 -> 863 (built when every later mask existed: future masks had been
+  excluding encounters); June 1,689 -> 1,091 / 764 -> 736 and November 502 -> 203 / 724 -> 676
+  (built before the earlier months' masks existed; now they use them, which is legitimate past
+  data); July-October and December-February unchanged. **Earlier documented June/November sts
+  counts (e.g. P2-4's 1,689) describe the old build, not the current partitions.**
+- **Design property, now explicit:** each window uses every earlier mask, so the mask history
+  grows along the archive (April sees only its own; February sees eleven). No future data, but
+  the exclusion strength is not stationary across windows; relevant only to detector columns.
+- **Walk-forward rerun:** static_logistic, static_lightgbm, tabicl, R2 and lgbm_context are
+  identical to the previous run (they use no detector columns). Detector variants barely move:
+  lgbm_detectors 0.145 (-0.035 [-0.048, -0.023], still loses), lgbm_detectors_context 0.192
+  (+0.012 [+0.005, +0.021]), no-exposure 0.191 (+0.011 [+0.004, +0.019]); k=50: 0.229 / 0.481 /
+  0.424. All three keep their verdicts under package clustering, the 12-month label and without
+  2024-11.
