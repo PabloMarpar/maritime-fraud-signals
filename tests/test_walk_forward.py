@@ -185,3 +185,49 @@ def test_window_dirs_skip_the_short_validation_window(tmp_path):
         "window=2024-06-01_2024-06-30",
         "window=2025-02-01_2025-02-26",
     ]
+
+
+def test_embedding_column_names_match_the_encoder():
+    ve = pytest.importorskip("model.vessel_encoder")
+    from model.walk_forward import EMB_COLUMNS
+
+    assert tuple(ve.EMB_COLUMNS) == tuple(EMB_COLUMNS)
+
+
+def _window_with_embeddings(start: date, end: date, desig: list[str | None]) -> Window:
+    from model.walk_forward import EMB_COLUMNS, STATIC_COLUMNS
+
+    w = _window(start, end, desig, [0.0] * len(desig))
+    rng = np.random.default_rng(start.toordinal())
+    n = len(desig)
+    w.split.features.clear()
+    w.split.features.update({"n_gaps": rng.normal(size=n), "is_tanker": np.ones(n), "is_foc": np.zeros(n)})
+    w = Window(w.split, w.imo, w.package, panel_columns=frozenset(w.split.features))
+    for c in (*STATIC_COLUMNS, *EMB_COLUMNS):
+        w.split.features.setdefault(c, rng.normal(size=n))
+    return w
+
+
+def test_encoder_heads_only_from_the_first_encoder_cutoff():
+    from model.walk_forward import score_cutoff
+
+    desig = ["2024-08-15", None, None, None, "2024-08-20", None]
+    jul = _window_with_embeddings(date(2024, 7, 1), date(2024, 7, 31), desig)
+    may = _window_with_embeddings(date(2024, 5, 1), date(2024, 5, 31), ["2024-06-15", *desig[1:]])
+    jun = _window_with_embeddings(date(2024, 6, 1), date(2024, 6, 30), ["2024-07-10", *desig[1:]])
+    aug = _window_with_embeddings(date(2024, 8, 1), date(2024, 8, 31), [None] * 6)
+    sep = _window_with_embeddings(date(2024, 9, 1), date(2024, 9, 30), [None] * 6)
+    # cutoff 2024-07-01: May's 2024-06-15 designation is a training positive, but the encoder
+    # saw July, so no enc_* score may exist yet.
+    before, _ = score_cutoff([may, jun, jul, aug], jul, use_tabicl=False)
+    assert "enc_logistic" not in before and "static_logistic" in before
+    after, _ = score_cutoff([may, jun, jul, aug, sep], sep, use_tabicl=False)
+    assert {"enc_logistic", "enc_lightgbm", "emb_logistic"} <= set(after)
+
+
+def test_detector_variants_never_see_the_embedding():
+    from model.walk_forward import EMB_COLUMNS
+
+    w = _window_with_embeddings(date(2024, 8, 1), date(2024, 8, 31), [None] * 3)
+    for variant in ("detectors", "detectors_context", "detectors_context_noexp"):
+        assert not set(EMB_COLUMNS) & set(detector_columns([w], variant))

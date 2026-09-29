@@ -104,6 +104,12 @@ TABICL_N_NEGATIVES = 5000
 TABICL_SEEDS = tuple(range(10))
 
 PRIMARY_FIRST_CUTOFF = date(2024, 8, 1)
+# P4-3j: the vessel encoder was pretrained on 2024-04..07, so its embeddings are scored only from
+# this cutoff on (docs/DECISIONS.md 2026-09-29). Same names as model.vessel_encoder.EMB_COLUMNS,
+# repeated here so this module does not import torch (a test pins the two together).
+ENCODER_FIRST_CUTOFF = date(2024, 8, 1)
+EMBEDDING_ROOT = Path("data/processed/embeddings")
+EMB_COLUMNS = tuple(f"emb_{i:02d}" for i in range(16))
 EXAMINED_CUTOFF = "2024-11-01"
 SECONDARY_HORIZON_DAYS = 365
 BUDGETS: tuple[int | str, ...] = ("r2", 50, 100, 200)
@@ -144,13 +150,22 @@ def _window_dirs(root: Path) -> list[Path]:
     return dirs
 
 
-def load_window(panel_path: Path, static_path: Path, matches_path: Path) -> Window:
-    """Load one window, joining the static columns and the designation package by mmsi, in
-    ``load_split``'s row order (mmsi, year_month)."""
+def load_window(
+    panel_path: Path, static_path: Path, matches_path: Path, embedding_path: Path | None = None
+) -> Window:
+    """Load one window, joining the static columns, the designation package and (if
+    `embedding_path` exists) the P4-3j embedding by mmsi, in ``load_split``'s row order."""
     split = load_split(panel_path.parent.name, panel_path)
     con = duckdb.connect()
     try:
         static_sql = ", ".join(f"CAST(s.{c} AS DOUBLE) AS {c}" for c in _FROM_STATIC_TABLE)
+        has_emb = embedding_path is not None and embedding_path.exists()
+        emb_sql = "".join(f", CAST(e.{c} AS DOUBLE) AS {c}" for c in EMB_COLUMNS) if has_emb else ""
+        emb_join = (
+            f"LEFT JOIN read_parquet('{embedding_path.as_posix()}') e ON p.mmsi = e.mmsi"
+            if has_emb
+            else ""
+        )
         data = con.execute(
             f"""
             WITH pop AS (
@@ -169,9 +184,10 @@ def load_window(panel_path: Path, static_path: Path, matches_path: Path) -> Wind
                 GROUP BY m.imo, f.d
             )
             SELECT p.mmsi, p.imo, CAST(TRY_CAST(p.imo AS BIGINT) AS DOUBLE) AS imo_serial,
-                   coalesce(k.package, '') AS package, {static_sql}
+                   coalesce(k.package, '') AS package, {static_sql}{emb_sql}
             FROM pop p
             LEFT JOIN read_parquet('{static_path.as_posix()}') s ON p.mmsi = s.mmsi
+            {emb_join}
             LEFT JOIN package k ON p.imo = k.imo
             ORDER BY p.mmsi, p.year_month
             """
@@ -181,7 +197,7 @@ def load_window(panel_path: Path, static_path: Path, matches_path: Path) -> Wind
     if not np.array_equal(np.asarray(data["mmsi"]), split.mmsi):
         raise ValueError(f"{panel_path}: static join changed the row set or order")
     panel_columns = frozenset(split.features)
-    for c in ("imo_serial", *_FROM_STATIC_TABLE):
+    for c in ("imo_serial", *_FROM_STATIC_TABLE, *(EMB_COLUMNS if has_emb else ())):
         split.features[c] = np.ma.filled(np.ma.asarray(data[c]).astype(float), np.nan)
     return Window(
         split=split,
@@ -319,7 +335,26 @@ def score_cutoff(
         scores[f"lgbm_{variant}"] = lightgbm_scores(xtr, ytr, test_matrix(test, cols))
     if use_tabicl:
         scores["tabicl"] = tabicl_scores(x_train, y_train, x_test)
+    if cutoff >= ENCODER_FIRST_CUTOFF and all(EMB_COLUMNS[0] in w.split.features for w in windows):
+        scores.update(encoder_scores(windows, test, use_tabicl))
     return scores, info
+
+
+def encoder_scores(windows: Sequence[Window], test: Window, use_tabicl: bool) -> dict[str, np.ndarray]:
+    """P4-3j heads: the static recipes on static + embedding columns, and the embedding alone."""
+    cutoff = test.start
+    both = (*STATIC_COLUMNS, *EMB_COLUMNS)
+    xtr, ytr = training_set(windows, cutoff, both)
+    xte = test_matrix(test, both)
+    out = {
+        "enc_logistic": logistic_scores(xtr, ytr, xte),
+        "enc_lightgbm": lightgbm_scores(xtr, ytr, xte),
+    }
+    etr, eyt = training_set(windows, cutoff, EMB_COLUMNS)
+    out["emb_logistic"] = logistic_scores(etr, eyt, test_matrix(test, EMB_COLUMNS))
+    if use_tabicl:
+        out["enc_tabicl"] = tabicl_scores(xtr, ytr, xte)
+    return out
 
 
 def _fmt(v: float | None, spec: str = ".3f") -> str:
@@ -420,10 +455,16 @@ def run_walk_forward(
     use_tabicl: bool = True,
     n_bootstrap: int = N_BOOTSTRAP,
     seed: int = SEED,
+    embedding_root: Path | None = EMBEDDING_ROOT / "seed=0",
 ) -> Path:
     dirs = _window_dirs(panel_root)
     windows = [
-        load_window(d / "part-0.parquet", static_root / d.name / "part-0.parquet", matches_path)
+        load_window(
+            d / "part-0.parquet",
+            static_root / d.name / "part-0.parquet",
+            matches_path,
+            embedding_root / d.name / "part-0.parquet" if embedding_root is not None else None,
+        )
         for d in dirs
     ]
     logger.info("Loaded %d windows: %s", len(windows), ", ".join(d.name for d in dirs))
@@ -455,12 +496,18 @@ def run_walk_forward(
     models = [
         "r2", "static_logistic", "static_lightgbm", "tabicl", "lgbm_context", "lgbm_detectors",
         "lgbm_detectors_context", "lgbm_detectors_context_noexp", "rule_tanker_dest",
+        "enc_logistic", "enc_lightgbm", "enc_tabicl", "emb_logistic",
     ]
     models = [m for m in models if any(m in c.scores for c in cut_all)]
     comparisons = [(m, "r2") for m in models if m not in ("r2", "rule_tanker_dest")]
     if "tabicl" in models:
         comparisons.append(("tabicl", "static_logistic"))
     comparisons.append(("static_lightgbm", "static_logistic"))
+    # P4-3j, pre-registered: does the embedding add anything to each static recipe?
+    for enc, base in (("enc_logistic", "static_logistic"), ("enc_lightgbm", "static_lightgbm"),
+                      ("enc_tabicl", "tabicl")):
+        if enc in models and base in models:
+            comparisons.append((enc, base))
     summary = _report(
         primary,
         cut_all,
@@ -492,6 +539,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n-bootstrap", type=int, default=N_BOOTSTRAP)
     p.add_argument("--summary", default=str(SUMMARY_PATH))
     p.add_argument("--scores", default=str(SCORES_PATH))
+    p.add_argument("--embeddings-seed", type=int, default=0, help="P4-3j encoder seed")
+    p.add_argument("--no-embeddings", action="store_true", help="Skip the P4-3j heads")
     return p.parse_args(argv)
 
 
@@ -503,6 +552,7 @@ def main(argv: list[str] | None = None) -> None:
         n_bootstrap=args.n_bootstrap,
         summary_path=Path(args.summary),
         scores_path=Path(args.scores),
+        embedding_root=None if args.no_embeddings else EMBEDDING_ROOT / f"seed={args.embeddings_seed}",
     )
 
 
