@@ -2255,3 +2255,20 @@ _2026-09-29_ (P4-11: GFW port visits -- pre-registered before any port visit is 
   that go dark in Russian ports produce fewer visits, which works against the feature, not for
   it. A Russian-terminal visit is close to the designation reason itself, like `dest_russia`
   (README must say so).
+
+_2026-09-29_ (P4-10 reference on `dev_clean`, v1 labels -- the bar for P4-9..P4-13)
+
+- **Run.** `python -m model.walk_forward --scope dev_clean --no-embeddings` (P4-3b's models,
+  unchanged; `outputs/walk_forward_summary_dev_clean.txt`). Primary pool test positives: 24/21/
+  21/0/16/17/17 rows (Aug..Feb; June and November have none left, all their positives are
+  examined).
+- **Pooled precision, dev_clean** (ceiling in brackets): R2's budget [0.070]: every model
+  0.063-0.065, indistinguishable (the budget dwarfs the positives). k=25 [0.663]: R2 0.063,
+  static_logistic 0.223, static_lightgbm 0.314, tabicl 0.326. **k=50 [0.331]: R2 0.063,
+  static_logistic 0.180, static_lightgbm 0.226, tabicl 0.211**, lgbm_detectors_context 0.197,
+  rule_tanker_dest 0.218. k=100 [0.166]: 0.063 / 0.116 / 0.133 / 0.133. Every static model beats
+  R2 at k = 25/50/100 (IMO-clustered intervals exclude 0).
+- **Bar for the decision metric: static_lightgbm, 0.226 at k=50.** Configurations tried on
+  dev_clean so far: 0 new (this is the reference).
+- **Reading.** On vessels nobody examined, the honest small-budget precision is ~0.2-0.3, not
+  P4-3b's pooled 0.57-0.71 at k=50 (which the examined vessels inflated), and still 3-5x R2.
