@@ -2509,3 +2509,37 @@ _2026-09-29_ (P4-13 final rerun result; P4-14 candidates named before the sealed
   --feature-set ports_hist=ports+hist`, once, after `analyst-review` clears the chain. Primary
   comparisons: each finalist vs R2 and vs `static_lightgbm` (P0 rule, IMO-clustered). Also
   reported: the same with v1 labels, and a line restricted to positives that exist only under v2.
+
+_2026-09-29_ (`analyst-review` of the push before unsealing: 1 blocker, 3 should-fix -- fixes
+specified here before they are run)
+
+- **BLOCKER, `features/history.py`.** A GFW self-reported identity is one persistent id whose
+  [transmissionDateFrom, transmissionDateTo] spans first to last use. Clipping `to` at window_end
+  still uses the fact that `to >= window_end`: an identity used before the 730-day range and again
+  after the cutoff counted as "active" inside the range. 772 IMOs affected. **Fix (P4-12b):** no
+  history column may read `transmissionDateTo` at all. Segments are ordered by
+  `transmissionDateFrom` only; "in the 730-day range" = the segments that START in
+  [window_end - 730 d, window_end), plus the latest one that started before the range (the
+  identity most recently adopted when the range opens). Flag runs, flag age and the FOC switch
+  follow the same from-only order. `hist_ais_age_days` already used `from` only. Same column
+  names; the P4-12 dev_clean result above is void, and P4-12b is a new configuration.
+- **SHOULD-FIX, `ingest/gfw_port_visits.py`.** A self-reported identity with no self-reported IMO
+  was kept when the entry's `registryInfo` listed the IMO; registry data is compiled with later
+  knowledge (possibly because the vessel became notorious), and it decides which pre-cutoff MMSIs
+  and port visits are attributed to the IMO. **Fix:** store the self-reported IMO and the match
+  basis; keep only identities whose own self-reported IMO equals the queried IMO; report the share
+  of ids dropped, by label, on non-sealed IMOs. Also: exclude placeholder IMOs 1234567 and
+  5555555; an id claimed by two IMOs is attributed to neither (counted).
+- **SHOULD-FIX, contamination gate.** A committed gate module replaces the ad-hoc P4-11 check:
+  on non-sealed IMOs, forward-positive vs never-sanctioned, (a) resolution and any-visit rates
+  (5-point rule, as before), and (b) richness: distributions of the number of GFW identities per
+  IMO, `pv_n_total` and `hist_n_mmsi_730d` (AUC with a 95% bootstrap interval; flagged if the
+  interval excludes 0.5 by more than 0.05, i.e. AUC outside [0.45, 0.55], as a documented
+  limitation -- these are also legitimate signals, so a flag is reported, not an automatic NO-GO).
+- **Then rerun on dev_clean** (v2): `ports`, `ports_hist`, and the ensemble, each logged as a
+  configuration; the adoption chain is re-decided by the amended rule 3 on the fixed data.
+- **Finalists amendment (before any sealed number exists):** add `static_pu_lightgbm` as a named
+  reference, so the sealed run measures what ports+hist add under the same recipe, paired. The
+  finalists are re-named after the rerun.
+- **Noted, not changed:** port-visit features use `end < window_end` (the inclusive last day of
+  the window), dropping that day's visits -- conservative, not a leak.
