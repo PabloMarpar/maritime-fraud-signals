@@ -2044,3 +2044,57 @@ _2026-09-29_ (anchorage-mask fix, rebuild, walk-forward rerun -- closes the revi
   (+0.012 [+0.005, +0.021]), no-exposure 0.191 (+0.011 [+0.004, +0.019]); k=50: 0.229 / 0.481 /
   0.424. All three keep their verdicts under package clustering, the 12-month label and without
   2024-11.
+
+_2026-09-29_ (P4-3j: our own vessel encoder -- detailed design, amending the 2026-09-29 sketch
+BEFORE any embedding is scored against a label)
+
+The governing constraint: 23-428 training positives per cutoff, but ~20k unlabelled vessel-months
+in the pretraining period. So all capacity goes into label-free learning, and the part that sees
+labels stays as small as the static models it must beat.
+
+- **Amendment 1 -- no static branch in the encoder.** The sketch had an MLP over the static
+  columns. Removed: with the same-vessel contrastive objective, length/width/imo_serial identify a
+  vessel exactly, so the encoder would solve its main task from them and ignore the track (an
+  identity shortcut, decided on self-supervised grounds, not on any label). Static columns enter
+  only the head, as in every other model.
+- **Amendment 2 -- a 16-d embedding** (the sketch said ~64): with 23 positives at the first
+  primary cutoff, the head gets 11 static + 16 embedding columns. Fixed a priori, not tuned.
+- **Input tokens: one per OBSERVED hour** of a vessel-month (not per 5-min point; up to 744),
+  built from clean AIS of that window only. Channels: log1p messages, SOG mean/max/std, COG
+  dispersion within the hour (1 - mean resultant length, SOG > 0.5 kn), |COG change| vs the
+  previous token, mean |heading - COG|, max draught (+ missing flag) and its change vs the previous
+  token, nav-status fractions (underway / at anchor / moored / restricted-or-constrained), log1p
+  distance to land (0.05-degree grid from `data/reference/land.parquet`, capped at 50 km),
+  inside-a-coastal-anchorage-cell flag (the window's OWN mask only), share of the hour's messages
+  flagged `on_land`, log1p hours since the previous observed token. Position enters only through
+  the hour index (sinusoidal). **No latitude, longitude, raw COG, mmsi, imo, name or flag is ever
+  an input**; the token table does not even store lat/lon (a guard test enforces the input list).
+- **Event tokens** (the window's own detector partitions): gaps (duration, probability), sts
+  (duration, confidence), behaviour and identity kinds, spoofing kinds except on_land (which is a
+  track channel); type embedding + hour index + log1p duration + score; at most 64 per
+  vessel-month, plus an always-present "no event" token.
+- **Architecture.** Track transformer (d=64, 2 layers, 4 heads, ff 128, dropout 0.1), event
+  transformer (1 layer), fusion = 4 learned latent queries cross-attending over both token sets,
+  flattened -> linear -> 16-d LayerNorm embedding. ~150k parameters.
+- **Population and period.** Every panel vessel-month with a valid IMO in windows
+  2024-04..2024-07, NOT filtered by sanctions status (filtering on the label would itself use
+  it). 10% of IMOs held out (hash of IMO) for early stopping.
+- **Self-supervised losses (equal weights, fixed a priori).** (1) Masked-span reconstruction:
+  ~15% of track tokens in spans of 3-8, predict their standardized channels (not the derivable
+  dt/draught-change ones). (2) Same-vessel contrastive (InfoNCE, temperature 0.1, one pair per IMO
+  per batch): two different months of the same IMO when available, otherwise two random crops of
+  one month; every view is a random contiguous crop (60-100%) with 10% token dropout. (3)
+  Next-month prediction from the embedding, only for source months 2024-04..06 (targets up to
+  2024-07-31): observed next month (BCE), share of next month's observed hours in each of 12
+  coarse regions (3 latitude x 4 longitude bands; soft cross-entropy), next month's median draught
+  / the vessel's max draught over 2024-04..07 (MSE). AdamW lr 3e-4, wd 0.01, batch 128, <= 40
+  epochs, early stopping on the held-out total loss (patience 3). Standardization statistics from
+  the pretraining period only.
+- **Frozen encoder -> embeddings for all 11 windows.** Scored only at cutoffs >= 2024-08-01 (the
+  encoder saw 2024-04..07, so earlier cutoffs are n/s).
+- **Heads and comparisons (P0 rule, primary budget = R2's count, IMO-clustered).**
+  Primary: `enc_logistic` (P4-3c logistic on static + embedding) vs `static_logistic`.
+  Secondary: `enc_lightgbm` vs `static_lightgbm`, `enc_tabicl` vs `tabicl` (same recipes as
+  their static versions), all three vs R2; `emb_logistic` (embedding only) vs R2, descriptive.
+  Encoder seed 0 is primary; seeds 1 and 2 are retrained and reported for stability only.
+- **Expected: probably null.** A null is reported as the result, not tuned away.
