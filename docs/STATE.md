@@ -431,9 +431,11 @@ design, not model architecture.
   old figures elsewhere in this file describe the old build. See `docs/DECISIONS.md`.
 - **`detect/gaps.py`, `detect/spoofing.py` and `detect/behaviour.py` still default their voyages
   input to the `window=*` glob.** `voyage_seq` restarts at 1 per window, so `lead() OVER (PARTITION
-  BY mmsi ORDER BY voyage_seq)` over the glob would pair voyages across windows. No current output
-  is affected (`pipeline.window` and this session's gaps run pass exact partitions; verified by
-  `analyst-review`), but the default is a trap -- switch it to the exact window partition as
+  BY mmsi ORDER BY voyage_seq)` over the glob would pair voyages across windows. `pipeline.window`
+  did NOT pass exact partitions to spoofing/behaviour until 8363cd5 (2026-09-29; it does now, and
+  behaviour was rebuilt for every window). Spoofing was not rebuilt: June's `synthetic_circle`
+  may double-count circles from the stray 2-day window below if it existed when June's spoofing
+  ran. Only the CLI defaults remain a trap -- switch it to the exact window partition as
   `features.panel` now does. The stray `data/tracks/voyages/window=2024-06-10_2024-06-11` (P3-4/A4
   validation window) sits in every window-partitioned tree; harmless to exact-partition readers.
 
