@@ -48,6 +48,7 @@
     { "id": "P4-5", "phase": 4, "done": false, "description": "SHAP attribution so every alert carries its reasons" },
     { "id": "P4-6", "phase": 4, "done": false, "description": "Run analyst-review for temporal leakage and validation honesty" },
     { "id": "P4-7", "phase": 4, "done": false, "description": "Write the label-bias section of the README" },
+    { "id": "P4-8", "phase": 4, "done": false, "description": "README results + limitations for the walk-forward (P4-3b), TabICLv2 (P4-3i) and the P4-3j encoder null: destination regexes designed on June/November vessels (71% of the pool's test positives), labels effectively OFAC+UK, detectors and encoder add nothing, small matched-budget wins because the ceiling is 0.216. Fold in P4-7 (label bias). Required by CLAUDE.md." },
 
     { "id": "P5-1", "phase": 5, "done": true, "description": "Export tracks, gaps and encounters for the map. Done 2026-09-27 as report/export_viz.py: uint16 binary tracks + JSON events/dossiers + a Web Mercator density raster, not GeoJSON/Arrow (size, see docs/DECISIONS.md). Re-run after every new window" },
     { "id": "P5-2", "phase": 5, "done": true, "description": "deck.gl + MapLibre map: animated tracks, gaps, encounters marked. Done 2026-09-27: viz/ explorer page (Astro + Svelte). Gaps drawn in the validated event colour (aqua, dashed), not red, see docs/DECISIONS.md" },

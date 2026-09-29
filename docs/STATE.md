@@ -355,71 +355,54 @@ _Last updated: 2026-09-29_
   - **Tooling:** Node 24 is portable in `%LOCALAPPDATA%\Programs\nodejs`. Commits are pushed to
     `origin` (GitHub, PabloMarpar/maritime-fraud-signals).
 
+- **P4-3b done 2026-09-29: the walk-forward over all 11 archive windows (2024-04..2025-02).**
+  Build finished (no FAIL), `features.static` per window, `model/walk_forward.py` (R2, static
+  logistic/LightGBM, P4-3's detector variants, TabICLv2, P4-3j heads) through the frozen P0
+  protocol; results in `outputs/walk_forward_summary*.txt` (git-ignored), numbers in
+  `docs/DECISIONS.md` 2026-09-29. Pooled 2024-08..2025-02 at R2's budget (ceiling 0.216): R2
+  0.180, static logistic 0.189 (fragile win), static LightGBM 0.196, TabICLv2 0.198 (robust),
+  detectors alone 0.145 (lose). k=50: R2 0.178 vs 0.566 / 0.709 / 0.680. Two `analyst-review`
+  passes: no temporal leak; fixed a static-column leak into the detector variants, a future
+  anchorage-mask read in sts/behaviour (all windows rebuilt), and shared bootstrap streams.
+  Caveat: 71% of the pool's test positives were seen while designing the destination regexes.
+- **P4-3i done 2026-09-29: TabICLv2** (tabicl 2.2.0 on the GPU, PyTorch 2.11+cu128) beats the
+  static logistic, level with static LightGBM.
+- **P4-3j done 2026-09-29: our own vessel encoder -- a null.** `features/vessel_tokens.py`,
+  `model/vessel_encoder.py` (147k-parameter transformer, self-supervised on 2024-04..07 only),
+  `model/encoder_diagnostics.py`. Learns real structure (ship type recoverable, AUC ~0.82;
+  same-vessel retrieval on unseen months top-1 ~0.19) but adds nothing to the static models
+  (enc_logistic vs static_logistic ~-0.005 at R2's budget, 3 seeds). Not to be retuned on these
+  results.
+
 ## In progress
 
-Nothing running. **P4-3b's archive build finished 2026-09-29 04:59** (`DONE`, no FAIL, all 11
-windows 2024-04..2025-02 plus panels); every day 2024-03-02..2025-02-26 is clean on disk. If a
-window ever needs rebuilding: `scripts/build_archive_windows.sh` via WMI
-(`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine =
+Nothing running. If an archive window ever needs rebuilding: `scripts/build_archive_windows.sh`
+via WMI (`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine =
 '"C:/Program Files/Git/bin/bash.exe" scripts/build_archive_windows.sh'; CurrentDirectory = '<repo
 root>'}`; never `Start-Process` from a Claude session), one build over `data/` at a time, kill by
-PID only, never edit the script while it runs. Do not prune clean data (P4-3h and P4-3j need it).
-Unexplained process deaths during the build (2026-09-28) were never explained.
+PID only. Never cap DuckDB at 6 GB for a monthly `sts` (it fails). Do not prune clean data (P4-3h
+needs it).
 
 ## Next up
 
-1. **DONE 2026-09-29:** the archive build (incl. the April/May rerun) ended `DONE` at 04:59 with
-   no FAIL; panels exist for all 11 windows. `features.static` built for all 11 windows
-   (`data/processed/static/window=.../`, 16-30 s each, no errors): 7,648-25,187 mmsi per window
-   (summer peak), June's 21,146 matches its panel.
-2. **DONE 2026-09-29: the walk-forward (P4-3b) and TabICLv2 (P4-3i).** `model/walk_forward.py`,
-   results in `outputs/walk_forward_summary.txt` (git-ignored; numbers in `docs/DECISIONS.md`
-   2026-09-29). Pooled 2024-08..2025-02 at R2's budget (ceiling 0.216): R2 0.180, static logistic
-   0.189 (fragile win), static LightGBM 0.196, **TabICLv2 0.198** (robust), detectors alone 0.145
-   (lose). At k=50: 0.178 vs 0.566 / 0.709 / 0.680. `analyst-review`: no temporal leak; one
-   blocker found and fixed (static columns leaked into the detector variants).
-   The review's anchorage-mask should-fix was fixed the same day (8363cd5), windows rebuilt,
-   walk-forward rerun: static/TabICL unchanged, detector variants within 0.005.
-   PyTorch 2.11+cu128 and tabicl 2.2.0 are installed (GPU verified).
-3. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
-   its pre-designation months, giving ~100 positives instead of 16. This also explains why adding
-   post-designation rows hurt. Pre-register it before running.
-4. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
-   Thresholds are fixed on March 2024 only; validate against GFW port visits.
-5. **Web (P5), in parallel. The site is live; what is left:**
-   - **P5-10, waiting for the author:** the author adds checkgraph.dev under Cloudflare Web
-     Analytics and passes the public token. Put it in `viz/.env.production` as
-     `PUBLIC_CF_BEACON`, rebuild, redeploy, and add a no-cookie line to the about page.
-   - **After the archive build:**
-     1. Run `python -m report.export_viz`.
-     2. Regenerate the share cards (`og-images.mjs`, needs `npx astro preview` running).
-     3. Rebuild the site.
-     4. Redeploy: `cd viz`, then `../relay/node_modules/.bin/wrangler deploy`.
-
-     The shadow-fleet figures and texts follow the new months by themselves.
-   - **P5-8:** after a day of traffic, check the relay's free-plan usage. Before re-exports
-     approach 20,000 files per deployment, shard the dossiers: today there are 9,353 files, of
-     which 9,145 are dossiers.
-   - **Local viewing:** the dev server can time out while the archive build loads the machine.
-     Use `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
-     local relay (`python -m ingest.aisstream`, or `npx wrangler dev --port 8765` in `relay/`).
-     A plain build targets the public relay.
-6. **DONE 2026-09-29: P4-3j, our own vessel encoder -- a null.** `features/vessel_tokens.py`
-   (hourly track tokens without position/COG/identity + event tokens, `data/processed/tokens/`),
-   `model/vessel_encoder.py` (147k-parameter transformer, self-supervised on 2024-04..07 only,
-   embeddings in `data/processed/embeddings/seed={0,1,2}/`), `model/encoder_diagnostics.py`, and
-   enc_* heads in `model/walk_forward.py`. The encoder learns real structure (ship type AUC ~0.82
-   without being told it, same-vessel retrieval on unseen months top-1 ~0.19) but adds nothing to
-   the static models: enc_logistic vs static_logistic ~-0.005 at R2's budget in all 3 seeds,
-   LightGBM/TabICL +-0.004 n.s. `analyst-review`: no leak, no handicap. Do not retune it on these
-   results; a new objective or re-testing inside P4-3g needs a fresh pre-registration.
-   Then P4-4 (calibration) and bagging PU as a remaining cheap challenger.
-   **README not yet updated** with the walk-forward, TabICLv2 and P4-3j results and their
-   limitations (vessel-level snooping of the destination regexes, OFAC+UK-only labels) --
-   `CLAUDE.md` requires it.
-7. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
-   Flag/name changes mostly happen AFTER designation (CREA), so they leak unless restricted to
-   well before the cutoff. Owner/manager networks are out (P4-3f NO-GO).
+1. **README (task P4-8, `CLAUDE.md` requires it):** add the walk-forward, TabICLv2 and P4-3j
+   results with their limitations -- the destination regexes were designed on June/November
+   vessels (71% of the pool's test positives), labels are effectively OFAC + UK (EU-only vessels
+   count as negatives), the behavioural detectors and the encoder add nothing, static-model wins
+   at R2's budget are small because the ceiling is 0.216. Fold in P4-7 (label bias).
+2. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
+   its pre-designation months (~100+ positives). Pre-register before running; the P4-3j
+   embedding may be re-tested there only if pre-registered too. `analyst-review` afterwards.
+3. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
+   Thresholds fixed on March 2024 only; validate against GFW port visits.
+4. **Web (P5):** now that the archive is built, run `python -m report.export_viz`, regenerate the
+   share cards (`viz/scripts/og-images.mjs`, needs `npx astro preview`), rebuild, and redeploy
+   (`cd viz`, `../relay/node_modules/.bin/wrangler deploy`). P5-4's confidence levels are no
+   longer blocked (static LightGBM/TabICLv2 beat R2). P5-10 waits for the author's Cloudflare
+   Web Analytics token. P5-8: shard the dossiers before 20,000 files per deployment. Local
+   viewing: `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
+   local relay.
+5. Then P4-4 (calibration), P4-5 (SHAP), bagging PU as a cheap challenger; P4-3d signal ideas.
 
 **Research report.** The deep search (2026-09-27) lives in
 `reports/Modelos para predecir la flota fantasma.md` and `research_notes/`. Both are in Spanish
@@ -584,7 +567,7 @@ design, not model architecture.
 
 ## Disk budget — read before downloading more days
 
-**~239 GB free** (of 931 GB) as of 2026-09-25 (re-measured this session). `data/clean/` now holds
+**102 GB free (90% of 931 GB used) as of 2026-09-29** -- down from ~213 GB on 2026-09-28: all 362 clean days 2024-03-02..2025-02-26 are on disk. Check before any new download; pruning clean data would block P4-3h. (Older figures below are history.) Was ~239 GB free on 2026-09-25. `data/clean/` now holds
 both real windows (June + November's 60-day lead-in/window) at ~37 GB total.
 `data/identity/` and `data/tracks/` together are a few MB; `data/coverage/` is ~123 MB (the
 legacy `liveness.parquet`, ~65 MB, plus the new partitioned `liveness/`, ~58 MB, both present at

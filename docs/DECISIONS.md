@@ -2154,3 +2154,11 @@ to the sanctions prediction. A null, reported as the result.)
   now would be selected on the test months. A behaviour-focused objective (month-specific rather
   than month-invariant) or re-testing the embedding inside P4-3g's hazard design (many more
   positives) would each need a fresh pre-registration.
+
+_2026-09-29_ (session close)
+
+- **README update is now task P4-8 and first in the queue** (P4-7's label-bias section folded in):
+  this session produced the project's main modelling results and their caveats, and `CLAUDE.md`
+  requires limitations in the README, not only here.
+- **P5-4's dossier confidence levels are unblocked:** they waited for a model that beats R2, and
+  static LightGBM and TabICLv2 now do (at R2's budget and, by a wide margin, at small budgets).
