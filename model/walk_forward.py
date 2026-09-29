@@ -574,6 +574,7 @@ def run_walk_forward(
         raise ValueError(f"scope {scope!r} reports sealed vessels; pass unseal=True (--unseal)")
     if labels not in LABEL_VERSIONS:
         raise ValueError(f"unknown label version {labels!r}")
+    label_version = labels  # `labels` is reused below for each cutoff's label array
     panel_root = panel_root or LABEL_VERSIONS[labels][0]
     matches_path = matches_path or LABEL_VERSIONS[labels][1]
     suffix = ("" if scope == ALL_SCOPE else f"_{scope}") + ("" if labels == "v1" else f"_{labels}")
@@ -652,7 +653,7 @@ def run_walk_forward(
         comparisons,
         n_bootstrap,
         seed,
-        scope=f"{scope}, labels {labels}",
+        scope=f"{scope}, labels {label_version}",
         budgets=BUDGETS if scope == ALL_SCOPE else HALF_BUDGETS,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)

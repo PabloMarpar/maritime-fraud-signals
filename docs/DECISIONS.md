@@ -2391,3 +2391,17 @@ _2026-09-29_ (P4-9: labels v2 landed and adopted -- before any model is scored w
   configuration). v1 is kept for comparison in the final report.
 - **The P4-10 split is unchanged** (examined stays the frozen v1 list); the 19 new IMOs fall into
   dev or sealed by the hash.
+
+_2026-09-29_ (P4-9: the bar re-measured under v2 labels, dev_clean)
+
+- **Run.** Same models, `--labels v2` (`outputs/walk_forward_summary_dev_clean_v2.txt`). Test
+  positives per primary cutoff rise to 26/27/26/4/21/21/21 (from 24/21/21/0/16/17/17).
+- **Pooled dev_clean, k=50 [ceiling 0.417]:** R2 0.068, static_logistic 0.203, static_lightgbm
+  0.243, tabicl 0.257, ens 0.263, **static_pu_lightgbm 0.277** (vs static_lightgbm +0.034
+  [+0.017, +0.071]). k=25 [0.811]: 0.068 / 0.251 / 0.371 / 0.389 / 0.366 / 0.417. k=100 [0.209]:
+  0.068 / 0.153 / 0.157 / 0.163 / 0.164 / 0.164. R2's budget [0.088]: 0.070 vs 0.076-0.081 (every
+  static model now beats R2 there too, intervals excluding 0, except the logistic).
+- **Bar under v2: static_pu_lightgbm, 0.277 at k=50.** PU's adoption holds under v2. No new
+  configuration (count stays 3).
+- Report-header bug fixed (the `labels` argument was shadowed by the per-cutoff label array; the
+  header printed the array, the numbers were unaffected).
