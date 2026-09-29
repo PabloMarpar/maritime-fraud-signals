@@ -541,6 +541,7 @@ def _has_anchorage_evidence(
     lon_a: float,
     lat_b: float,
     lon_b: float,
+    mask_end: date | None = None,
 ) -> bool:
     """True if either voyage-boundary position lies within ANCHORAGE_EVIDENCE_RADIUS_M of a
     coastal anchorage cell that still qualifies as one with `mmsi` itself excluded from the
@@ -549,6 +550,10 @@ def _has_anchorage_evidence(
     :data:`_ANCHORAGE_MIN_OTHER_VESSELS` members could use its own mooring to exonerate its own
     draught change. Mirrors detect.sts's own `_ANCHORAGE_MIN_OTHER_VESSELS` leave-one-out idiom
     exactly, applied here to a single candidate MMSI instead of a pair.
+
+    ``mask_end``: only mask rows whose own ``window_end`` is on or before it count, so a glob
+    over every window built so far never lends a later window's mask (future AIS) to this one --
+    same fix and reason as ``detect.sts.apply_structural_gates``.
     """
     (found,) = con.execute(
         "SELECT EXISTS ("
@@ -558,13 +563,15 @@ def _has_anchorage_evidence(
         "      ST_Distance_Sphere(ST_Point(?, ?), ST_Point(center_latitude, center_longitude)) <= ? "
         "      OR ST_Distance_Sphere(ST_Point(?, ?), ST_Point(center_latitude, center_longitude)) <= ?"
         "    )"
-        ")",
+        + ("    AND window_end <= ?" if mask_end is not None else "")
+        + ")",
         [
             str(anchorages_path),
             mmsi,
             lat_a, lon_a, ANCHORAGE_EVIDENCE_RADIUS_M,
             lat_b, lon_b, ANCHORAGE_EVIDENCE_RADIUS_M,
-        ],
+        ]
+        + ([mask_end] if mask_end is not None else []),
     ).fetchone()
     return bool(found)
 
@@ -588,8 +595,10 @@ def check_draught_change_unexplained(
     anchorages_path: Path,
     sts_path: Path,
     window_end: datetime,
+    mask_end: date | None = None,
 ) -> list[BehaviourEvent]:
     """Flag voyage-to-voyage draught changes with no port/anchorage or STS evidence in the gap.
+    ``mask_end`` is passed through to :func:`_has_anchorage_evidence`.
 
     Requires `_candidate_voyages` and `_voyage_draughts`. Candidate pairs are found via a `LEAD`
     window over voyage_seq per mmsi, mirroring detect.gaps.candidate_gaps -- then, for each
@@ -642,7 +651,8 @@ def check_draught_change_unexplained(
         new_draught,
     ) in rows:
         if _has_anchorage_evidence(
-            con, anchorages_path, mmsi, end_lat, end_lon, next_start_lat, next_start_lon
+            con, anchorages_path, mmsi, end_lat, end_lon, next_start_lat, next_start_lon,
+            mask_end=mask_end,
         ):
             continue
         if _has_sts_evidence(con, sts_path, mmsi, end_time, next_start_time):
@@ -758,7 +768,9 @@ def build_behaviour_events(
             ),
             (
                 "draught_change_unexplained",
-                lambda: check_draught_change_unexplained(con, anchorages_path, sts_path, window_end),
+                lambda: check_draught_change_unexplained(
+                    con, anchorages_path, sts_path, window_end, mask_end=end
+                ),
             ),
         ):
             check_start = datetime.now(timezone.utc)

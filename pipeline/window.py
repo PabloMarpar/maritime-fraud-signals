@@ -335,7 +335,7 @@ def process_window(
         start,
         end,
         in_root=roots["clean"],
-        voyages_path=_glob(roots["voyages"]),
+        voyages_path=voyages_path,
         land_path=roots["land"],
         out_root=roots["spoofing"],
         force=force,
@@ -354,10 +354,12 @@ def process_window(
         start,
         end,
         in_root=roots["clean"],
-        voyages_path=_glob(roots["voyages"]),
+        voyages_path=voyages_path,
         ports_path=roots["ports"],
+        # The glob is deliberate: masks from every window built so far, filtered inside sts and
+        # behaviour to window_end <= this window's end (never a later window's mask).
         anchorages_path=_glob(roots["anchorages"]),
-        sts_path=_glob(roots["sts"]),
+        sts_path=sts_path,
         out_root=roots["behaviour"],
         force=force,
     )

@@ -13,6 +13,8 @@ import pytest
 from detect import sts
 
 DAY = date(2024, 6, 5)
+# Anchorage masks carry their own window_end; fixtures default to one well before DAY.
+PAST_MASK_END = date(2024, 5, 31)
 DAY2 = date(2024, 6, 6)
 DAY3 = date(2024, 6, 7)
 DAY4 = date(2024, 6, 8)
@@ -50,7 +52,9 @@ def _write_clean_partition(root: Path, day: date, rows: list[tuple]) -> None:
         con.close()
 
 
-def _write_anchorages(path: Path, rows: list[tuple]) -> None:
+def _write_anchorages(
+    path: Path, rows: list[tuple], mask_end: date = PAST_MASK_END
+) -> None:
     """Write a synthetic anchorages.parquet with just the columns apply_structural_gates reads.
 
     rows is a list of (center_latitude, center_longitude, member_mmsis, is_coastal) tuples.
@@ -60,10 +64,12 @@ def _write_anchorages(path: Path, rows: list[tuple]) -> None:
     try:
         con.execute(
             "CREATE TABLE anchorages (center_latitude DOUBLE, center_longitude DOUBLE, "
-            "member_mmsis BIGINT[], is_coastal BOOLEAN)"
+            "member_mmsis BIGINT[], is_coastal BOOLEAN, window_end DATE)"
         )
         if rows:
-            con.executemany("INSERT INTO anchorages VALUES (?, ?, ?, ?)", rows)
+            con.executemany(
+                "INSERT INTO anchorages VALUES (?, ?, ?, ?, ?)", [(*r, mask_end) for r in rows]
+            )
         con.execute(f"COPY anchorages TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
@@ -528,3 +534,26 @@ def test_build_sts_events_raises_when_anchorages_missing(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="detect.anchorages"):
         sts.build_sts_events(DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root)
+
+
+@pytest.mark.parametrize(("mask_end", "expected"), [(DAY, 0), (DAY + timedelta(days=1), 1)])
+def test_an_anchorage_mask_from_a_later_window_is_ignored(tmp_path, mask_end, expected):
+    """A mask row whose own window_end is after the window being built is future AIS: it must
+    not exclude an encounter (analyst-review, 2026-09-29). The same row dated on the window's
+    own end still excludes it (control)."""
+    in_root = tmp_path / "clean" / "ais_dk"
+    anchorages_path = tmp_path / "anchorages.parquet"
+    out_root = tmp_path / "sts"
+    _write_anchorages(
+        anchorages_path, [(LAT0, LON0, [301, 302, 303, 304, 305, 306], True)], mask_end=mask_end
+    )
+
+    rows = _dwell_rows(100, LAT0, LON0, start_minute=0, duration_hours=3.0)
+    rows += _dwell_rows(200, LAT0, LON0, start_minute=0, duration_hours=3.0)
+    _write_clean_partition(in_root, DAY, rows)
+
+    out_path = sts.build_sts_events(
+        DAY, DAY, in_root=in_root, anchorages_path=anchorages_path, out_root=out_root
+    )
+
+    assert len(_read_events(out_path)) == expected

@@ -14,6 +14,8 @@ from detect import behaviour
 from process.tracks import DEFAULT_GAP_HOURS
 
 DAY = date(2024, 6, 5)
+# Anchorage masks carry their own window_end; fixtures default to one well before DAY.
+PAST_MASK_END = date(2024, 5, 31)
 
 
 def _ts(hour: int, minute: int = 0, day: date = DAY) -> datetime:
@@ -111,17 +113,21 @@ def _write_empty_ports(path: Path) -> None:
     _write_ports(path, [])
 
 
-def _write_anchorages(path: Path, rows: list[tuple[float, float, list[int], bool]]) -> None:
+def _write_anchorages(
+    path: Path, rows: list[tuple[float, float, list[int], bool]], mask_end: date = PAST_MASK_END
+) -> None:
     """rows is a list of (center_latitude, center_longitude, member_mmsis, is_coastal) tuples."""
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     try:
         con.execute(
             "CREATE TABLE anchorages (center_latitude DOUBLE, center_longitude DOUBLE, "
-            "member_mmsis BIGINT[], is_coastal BOOLEAN)"
+            "member_mmsis BIGINT[], is_coastal BOOLEAN, window_end DATE)"
         )
         if rows:
-            con.executemany("INSERT INTO anchorages VALUES (?, ?, ?, ?)", rows)
+            con.executemany(
+                "INSERT INTO anchorages VALUES (?, ?, ?, ?, ?)", [(*r, mask_end) for r in rows]
+            )
         con.execute(f"COPY anchorages TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
@@ -638,3 +644,30 @@ def test_missing_voyages_raises(tmp_path):
             ports_path=tmp_path / "ports.parquet", anchorages_path=tmp_path / "anchorages.parquet",
             sts_path=tmp_path / "sts.parquet", out_root=tmp_path / "behaviour",
         )
+
+
+def test_draught_change_ignores_an_anchorage_mask_from_a_later_window(tmp_path):
+    """The anchorage that explains the change in
+    test_draught_change_explained_by_anchorage_not_flagged, but dated in a later window: future
+    AIS, so it must not count as evidence (analyst-review, 2026-09-29)."""
+    ports_path = tmp_path / "ports.parquet"
+    anchorages_path = tmp_path / "anchorages.parquet"
+    sts_path = tmp_path / "sts.parquet"
+    out_root = tmp_path / "behaviour"
+    mmsi = 444555889
+
+    in_root, voyages_path, _v1_end, _v2_start = _draught_change_fixture(tmp_path, mmsi, 5.0, 10.0)
+    _write_empty_ports(ports_path)
+    _write_anchorages(
+        anchorages_path,
+        [(57.0, 5.0, [mmsi, *OTHER_MMSI[:5]], True)],
+        mask_end=DAY + timedelta(days=1),
+    )
+    _write_empty_sts(sts_path)
+
+    out_path = behaviour.build_behaviour_events(
+        DAY, DAY, in_root=in_root, voyages_path=voyages_path, ports_path=ports_path,
+        anchorages_path=anchorages_path, sts_path=sts_path, out_root=out_root,
+    )
+
+    assert len(_read_events(out_path)) == 1

@@ -171,20 +171,28 @@ def test_producers_other_than_backfill_and_liveness_scope_to_the_window_only(tmp
         assert (start, end) == (START, END), f"{name} was not scoped to the window"
 
 
-def test_dependent_detectors_receive_glob_paths_not_single_window_paths(tmp_path, monkeypatch):
+def test_dependent_detectors_receive_this_windows_partitions_and_the_mask_glob(tmp_path, monkeypatch):
+    """voyages and sts are passed as this window's own partition: a date filter alone does not
+    stop a glob from pairing voyages across OVERLAPPING windows (the 2-day P3-4/A4 validation
+    window sits inside June), and voyage_seq restarts per window. The anchorage mask stays a glob
+    over every window built so far -- sts/behaviour filter it to window_end <= this window's end
+    (analyst-review, 2026-09-29)."""
     calls: dict = {}
     _patch_all_builders(monkeypatch, calls)
 
     window.process_window(START, END, data_root=tmp_path, lead_in_days=LEAD_IN_DAYS)
 
+    voyages = window_partition_path(START, END, tmp_path / "tracks" / "voyages")
+    sts_exact = window_partition_path(START, END, tmp_path / "detect" / "sts")
+    mask_glob = tmp_path / "coverage" / "anchorages" / "window=*" / "part-0.parquet"
     _start, _end, spoofing_kwargs = calls["spoofing"][0]
-    assert spoofing_kwargs["voyages_path"] == tmp_path / "tracks" / "voyages" / "window=*" / "part-0.parquet"
+    assert spoofing_kwargs["voyages_path"] == voyages
     _start, _end, sts_kwargs = calls["sts"][0]
-    assert sts_kwargs["anchorages_path"] == tmp_path / "coverage" / "anchorages" / "window=*" / "part-0.parquet"
+    assert sts_kwargs["anchorages_path"] == mask_glob
     _start, _end, behaviour_kwargs = calls["behaviour"][0]
-    assert behaviour_kwargs["voyages_path"] == tmp_path / "tracks" / "voyages" / "window=*" / "part-0.parquet"
-    assert behaviour_kwargs["anchorages_path"] == tmp_path / "coverage" / "anchorages" / "window=*" / "part-0.parquet"
-    assert behaviour_kwargs["sts_path"] == tmp_path / "detect" / "sts" / "window=*" / "part-0.parquet"
+    assert behaviour_kwargs["voyages_path"] == voyages
+    assert behaviour_kwargs["anchorages_path"] == mask_glob
+    assert behaviour_kwargs["sts_path"] == sts_exact
     # identity_anomalies gets the ROOT (it resolves the exact window itself), not a glob -- P3-4/A2's
     # hard-blocker fix requires the caller's own exact window, not the accumulated history.
     _start, _end, ia_kwargs = calls["identity_anomalies"][0]

@@ -502,8 +502,15 @@ def apply_structural_gates(
     max_median_sog_knots: float,
     max_separation_m: float,
     min_anchorage_distance_m: float,
+    mask_end: date | None = None,
 ) -> None:
     """Apply GFW's four hard structural gates, writing ``_gated``.
+
+    ``mask_end``: only anchorage-mask rows whose own ``window_end`` is on or before it are used.
+    ``anchorages_path`` is normally a glob over every window built so far, so without this a
+    window built after later masks existed would use future AIS (``analyst-review``,
+    2026-09-29). ``build_sts_events`` always passes the window's own end; None (no filter) is
+    kept for masks without a ``window_end`` column.
 
     The anchorage-distance leave-one-out is arithmetic (``len(member_mmsis) -
     list_contains(...)::INT - list_contains(...)::INT``), not ``list_filter`` with a lambda --
@@ -525,9 +532,10 @@ def apply_structural_gates(
         f"       - list_contains(a.member_mmsis, e.mmsi_b)::INT >= {_ANCHORAGE_MIN_OTHER_VESSELS} "
         f"   AND abs(a.center_latitude - e.latitude) <= {_ANCHORAGE_BBOX_LAT_DEG} "
         f"   AND abs(a.center_longitude - e.longitude) <= {_ANCHORAGE_BBOX_LON_DEG}"
-        ") AS distance_to_anchorage_m "
+        + (" AND a.window_end <= ?" if mask_end is not None else "")
+        + ") AS distance_to_anchorage_m "
         "FROM _episodes e",
-        [str(anchorages_path)],
+        [str(anchorages_path)] + ([mask_end] if mask_end is not None else []),
     )
     con.execute(
         "CREATE OR REPLACE TEMP TABLE _gated AS "
@@ -784,6 +792,7 @@ def build_sts_events(
             MAX_MEDIAN_SOG_KNOTS,
             MAX_SEPARATION_M,
             MIN_ANCHORAGE_DISTANCE_M,
+            mask_end=end,
         )
         (n_gated,) = con.execute("SELECT count(*) FROM _gated").fetchone()
         logger.info(
