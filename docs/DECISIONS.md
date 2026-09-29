@@ -2451,3 +2451,7 @@ _2026-09-29_ (P4-11: GFW port visits landed; coverage gate GO)
   resolved 1.000 vs 0.999 (+0.001 [+0.000, +0.001]); any port visit 2023-06..2025-02 0.984 vs
   0.986 (-0.002 [-0.016, +0.010]). Both well inside 5 points -> **GO**. Unlike Wikidata build
   years, GFW coverage does not depend on the label.
+- **P4-3h's GFW validation gate (for the record):** 64 of 100 sampled laden-return trips have a
+  RUS port visit (confidence >= 3) between the crossings -- **0.64 < 0.80**, so per the
+  pre-registration the columns are "eastern-Baltic loading, not specifically Russian". They were
+  already not adopted; this does not reopen it.
