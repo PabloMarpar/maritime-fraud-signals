@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-28_
+_Last updated: 2026-09-29_
 
 ## Done
 
@@ -381,8 +381,8 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
   `python -m pipeline.window` runs every producer in a fresh process (the Windows heap lock had
   slowed April's `on_land` and November's `sts` 10x+ inside the long-lived process). Earlier
   speedups: `process.clean` 101 s -> 5 s/day; `process.tracks` 19 min -> ~3 min;
-  `process.identity` materialize-once (**still uncommitted, with `process/tracks.py`**; unit tests
-  pass, not yet compared on a real window -- do that).
+  `process.identity` materialize-once (committed c27bffe 2026-09-29 after a real-window check:
+  June `mmsi_imo` identical, voyages identical except 250 tied endpoints -- see Open questions).
 - **Open issue 2: unexplained deaths.** `prefetch_2024-07` died at 13:28 (no traceback, no
   Windows crash or low-memory event); the 11:36 build died at ~11:41 together with a local relay,
   and the web session confirms it did not kill them. Cause unknown.
@@ -399,12 +399,10 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
 
 ## Next up
 
-0. **First, on the running build:** check July's per-step times in
-   `outputs/logs/window_2024-07-01.log` (expected ~45-60 min per full window now), and compare
-   `process.identity`'s new version against an existing window's `mmsi_imo` partition.
-1. **When P4-3b ends (both runs -- the rerun is scheduled, see above):** check no window still shows FAIL, then `python -m
-   features.static --start <s> --end <e>` for every window (it writes
-   `data/processed/static/window=.../`).
+1. **DONE 2026-09-29:** the archive build (incl. the April/May rerun) ended `DONE` at 04:59 with
+   no FAIL; panels exist for all 11 windows. `features.static` built for all 11 windows
+   (`data/processed/static/window=.../`, 16-30 s each, no errors): 7,648-25,187 mmsi per window
+   (summer peak), June's 21,146 matches its panel.
 2. **Walk-forward (rest of P4-3b):** extend `model.lightgbm_risk` to every monthly cutoff,
    scored through `model.pooled_evaluation` (the frozen P4-3e protocol). Variants: R2, P4-3's
    pre-registered ones, and the frozen P4-3c `static` variant (logistic regression, plus LightGBM
@@ -484,6 +482,10 @@ design, not model architecture.
   downstream. `detect/sts.py`'s `nav_status` `mode()` resolution has the same class of issue (one
   real row's `nav_status_b` flipped between reruns during the same check, though it happened not
   to change that row's confidence score) -- revisit both together if this becomes load-bearing.
+  **Same class in `process/tracks.py` (found 2026-09-29):** voyage `start_/end_latitude|longitude`
+  use `arg_min/arg_max(..., timestamp)`, and 250/95,692 real June voyages flipped an endpoint
+  between two runs -- every one at a timestamp where the vessel reports more than one distinct
+  position. Times, point counts and voyage boundaries are unaffected.
 - **THE BIG ONE, RESOLVED by P4-0 (2026-09-22): four of five detector families carry no rescuable
   signal against the sanctions label in this window, with or without exposure normalization.** The
   ad-hoc check that raised this question (below, kept for the record) hypothesized that raw counts
