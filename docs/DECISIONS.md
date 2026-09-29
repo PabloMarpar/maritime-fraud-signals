@@ -2290,3 +2290,29 @@ setting is P4-3's PARAMS.
   censored. 182 days rather than P4-3g's 1 or 3 months because the test label is long-horizon
   (designated any time after window_end); h = 1/3 answer a timing question this metric does not
   measure, and are not run.
+
+_2026-09-29_ (P4-12: cross-month vessel history -- pre-registered before any history feature is
+computed)
+
+Per row (vessel IMO x window W), using only information dated strictly before W's `window_end`.
+- **From GFW self-reported identity segments** (`data/reference/gfw/vessel_ids.parquet`, P4-11:
+  ssvid, shipname, flag, `transmissionDateFrom`/`To`). Only segments with `transmissionDateFrom <
+  window_end`, each clipped at `window_end` (a `transmissionDateTo` after it is never read).
+  - `hist_n_flags_730d`, `hist_n_names_730d`, `hist_n_mmsi_730d`: distinct flags / names / ssvid
+    among segments active at any time in [window_end - 730 d, window_end).
+  - `hist_flag_age_days`: days from the start of the current flag run (the latest segment whose
+    flag differs from the segment before it; the earliest segment if the flag never changed) to
+    window_end, capped at 1,825.
+  - `hist_ais_age_days`: window_end minus the earliest `transmissionDateFrom`, capped at 3,650.
+  - `hist_to_foc_730d`: 1 if, inside the 730-day window, a segment under a non-FOC flag is
+    followed by one under an FOC flag (`process.foc`'s registries, mapped to ISO3).
+  - IMOs GFW does not resolve: NaN in all of these (training-median imputation).
+- **From this archive's own panels** (Danish coverage), per IMO, windows strictly before W:
+  - `hist_prior_windows_seen`: share of the previous (up to) 6 monthly windows in which the IMO
+    appears; NaN when W is the first window.
+  - `hist_prior_dest_russia`: 1 if any of those windows has `dest_russia` = 1 for the IMO; NaN
+    when W is the first window.
+- **Not features:** flag or name changes AFTER window_end (they mostly follow designation, CREA),
+  GFW `registryInfo` (ownership/registry data is compiled with later knowledge).
+- **Variants:** `hist_lightgbm`, `hist_tabicl` = the static recipes on STATIC_COLUMNS + the P4-11
+  port columns (if P4-11 is adopted) + these columns. Decision per amended rule 3.
