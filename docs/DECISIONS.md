@@ -1914,3 +1914,52 @@ _2026-09-28_ (P5-9: the shadow-fleet page and share cards, author's pick)
   more is not better either: `sts` slots on 3 days took 19.5 s at 4 threads, 25.0 s at 8, 29.8 s
   at 16. `process_window(isolate_steps=False)` stays the default so tests can monkeypatch; the CLI
   isolates unless `--in-process`.
+
+_2026-09-29_ (P4-3b/P4-3i/P4-3j: walk-forward details, two new challengers -- pre-registered before any
+archive-month score exists)
+
+- **State at registration.** All 11 windows (2024-04..2025-02) are built, with panels and
+  `features.static` partitions. No model has scored any window other than June/November (P4-2,
+  P4-3, P4-3c). Nothing below has been run against any label.
+- **Walk-forward mechanics (P4-3b), filling in what P0 left open.** Expanding window: for cutoff
+  C = test window_start, the training set is every built window whose window_end < C, each with
+  its own P4-0 population and P4-3's as-of-cutoff label (designated in (own window_end, C)),
+  pooled row-wise (a vessel seen in several months contributes several rows). Test rows: the
+  test window's P4-0 population; primary label `label_is_sanctioned_after_window_end`,
+  secondary designated within 12 months of window_end (P0). Static columns are joined by mmsi
+  from `data/processed/static/window=<same window>/`; `imo_serial = TRY_CAST(imo AS BIGINT)`
+  from the panel. Missing values: medians of the training rows only. Cutoffs with 0 training
+  positives are reported as "not scorable" for learned models, never dropped silently.
+- **Sensitivity pre-registered:** the pooled result is also reported without the 2024-11 cutoff,
+  the only test month already examined (P4-3, P4-3c).
+- **P4-3i: TabICLv2 as a pretrained challenger.** `tabicl==2.2.0`, checkpoint
+  `tabicl-classifier-v2-20260212.ckpt` (BSD-3, publishable; TabPFN >= 2.5 is excluded because its
+  licence forbids using outputs in commercial decisions and this project publishes its scores).
+  Inputs: exactly the frozen P4-3c static column set, training-median imputed, no scaling (the
+  model normalises internally). Every package default (n_estimators=8, softmax temperature,
+  feature shuffling). Contexts: all training positives + 5,000 training negatives drawn
+  uniformly without replacement (all of them if fewer), 10 contexts with seeds 0..9; score = mean
+  P(positive) over contexts; ranked by that raw score, no oversampling, no threshold. GPU. No
+  hyperparameter is chosen after seeing any score. Comparisons, P0 decision rule: vs R2 (the
+  project bar) and vs the static logistic (does a pretrained transformer add anything to the
+  linear model?). **Expected: small or no gain** (research report, 2026-09-27: no published test
+  at ~16 positives or with precision@k).
+- **P4-3j: our own vessel encoder, pre-registered as a design, built later.** Goal: complexity
+  where there is data (unlabelled AIS, ~20k vessels/month), simplicity where there is none
+  (16-150 labels).
+  - Architecture: per vessel-month, (a) a transformer over the thinned track (`data/tracks/thin`,
+    5-min) WITHOUT absolute latitude/longitude -- per-step dt, SOG, COG change, draught,
+    nav_status, distance to land, in-anchorage flag, silence markers; (b) a transformer over the
+    detector event sequence (gaps, spoofing, sts, behaviour, identity kinds, with times);
+    (c) an MLP over the static columns; fused by cross-attention into one ~64-d embedding. No
+    mmsi/imo/name/flag input (no identity memorisation).
+  - Self-supervised pretraining ONLY on 2024-04-01..2024-07-31 (before the first primary cutoff),
+    frozen for every cutoff: masked-span reconstruction, same-vessel contrastive pairs across
+    months, and next-month region/laden-state prediction with targets restricted to data up to
+    2024-07-31 (July rows have no next-month target). Normalisation statistics also from that
+    period only. Architecture sizes and pretraining settings are chosen on self-supervised
+    losses within that period, never on a label.
+  - Supervised head: the P4-3c logistic (C=0.3, balanced) on [static columns + embedding].
+    Primary comparison: vs the static logistic alone (does the embedding add anything?), P0
+    rule; also vs R2. **Expected: probably null** (research report's "trajectory encoder without
+    coordinates"); a null is reported, not buried.
