@@ -494,7 +494,7 @@ def run_walk_forward(
     n_bootstrap: int = N_BOOTSTRAP,
     seed: int = SEED,
     embedding_root: Path | None = EMBEDDING_ROOT / "seed=0",
-    scope: str = "dev",
+    scope: str = "dev_clean",
     unseal: bool = False,
 ) -> Path:
     """Run every cutoff and report on `scope`'s test rows only (P4-10). ``"all"`` reproduces
@@ -602,8 +602,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--embeddings-seed", type=int, default=0, help="P4-3j encoder seed")
     p.add_argument("--no-embeddings", action="store_true", help="Skip the P4-3j heads")
     p.add_argument(
-        "--scope", default="dev", choices=[*SCOPES, ALL_SCOPE],
-        help="Test rows to report (P4-10): dev, dev_clean, sealed, or all (P4-3b)",
+        "--scope", default="dev_clean", choices=[*SCOPES, ALL_SCOPE],
+        help="Test rows to report (P4-10): dev_clean (the decision scope), dev, sealed, or all",
     )
     p.add_argument(
         "--unseal", action="store_true",

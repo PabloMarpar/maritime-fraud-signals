@@ -2205,3 +2205,17 @@ feature is scored)
   (b) Positives added by new label sources (P4-9) never counted as positives in any metric, so on
   them the seal is fully clean; they get their own line in the final scoring. (c) 63 sealed
   forward-positive IMOs (v1) is a small set, so the final intervals will be wide.
+
+_2026-09-29_ (P4-10 amendment, before any new attempt was scored: decide on `dev_clean`)
+
+- **Flaw found in rule 3.** `examined` IMOs are ever-sanctioned by construction, so in the
+  primary pool every examined row is a forward positive. Scope `dev` (examined + dev) therefore
+  has about twice the population's positive rate (R2 at its own budget: 0.278 in `dev` vs 0.180 on
+  all rows in P4-3b) and 193 of its 251 positive IMOs are the examined vessels -- the bias the
+  split exists to remove. Seen on the first `dev` run (the v1 reference, P4-3b's models only;
+  `outputs/walk_forward_summary_dev.txt`), before any new label, feature or model was scored.
+- **Amended rule 3.** The decision metric is pooled precision at k=50 in scope `dev_clean` (dev
+  IMOs only), with R2's budget next to it. `dev_clean` and `sealed` are built by the same hash
+  over the same non-examined IMOs, so `dev_clean` is an exchangeable preview of `sealed`; its cost
+  is size (58 forward-positive IMOs under v1). `dev` is still reported, as secondary. Everything
+  else in P4-10 stands.
