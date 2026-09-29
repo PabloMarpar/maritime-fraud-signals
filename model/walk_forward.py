@@ -67,12 +67,16 @@ from model.pooled_evaluation import (
     pooled_ceiling,
     pooled_precision,
 )
+from model.sealed_split import SCOPES, scope_mask
 from process.partitions import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
 STATIC_ROOT = Path("data/processed/static")
 SANCTIONS_MATCHES_PATH = Path("data/identity/sanctions_matches.parquet")
+# P4-3b's run over every row (scope "all"). From P4-10 on, a run writes only its own scope's rows,
+# to a scope-suffixed path; this file still holds sealed vessels' P4-3b scores and must never be
+# sliced by model.sealed_split's groups (docs/DECISIONS.md 2026-09-29, P4-10).
 SCORES_PATH = Path("data/processed/walk_forward_scores.parquet")
 SUMMARY_PATH = Path("outputs/walk_forward_summary.txt")
 
@@ -114,6 +118,11 @@ EMB_COLUMNS = tuple(f"emb_{i:02d}" for i in range(16))
 EXAMINED_CUTOFF = "2024-11-01"
 SECONDARY_HORIZON_DAYS = 365
 BUDGETS: tuple[int | str, ...] = ("r2", 50, 100, 200)
+# P4-10: a dev or sealed scope holds about half the vessels, so its fixed budgets are halved too.
+HALF_BUDGETS: tuple[int | str, ...] = ("r2", 25, 50, 100)
+ALL_SCOPE = "all"
+# Scopes whose report would reveal performance on sealed vessels; they need an explicit unseal.
+UNSEAL_REQUIRED = frozenset({ALL_SCOPE, "sealed"})
 N_BOOTSTRAP = 2000
 SEED = 0
 
@@ -368,6 +377,16 @@ def _comparison_rng(seed: int, a: str, b: str, budget: object, scope: str = "") 
 DESCRIPTIVE_ONLY = frozenset({"emb_logistic", "rule_tanker_dest"})
 
 
+def restrict(cutoff: Cutoff, mask: np.ndarray) -> Cutoff:
+    """`cutoff` keeping only the rows where `mask` is true (labels, clusters and every score)."""
+    return Cutoff(
+        cutoff.name,
+        cutoff.labels[mask],
+        cutoff.clusters[mask],
+        {m: np.asarray(s)[mask] for m, s in cutoff.scores.items()},
+    )
+
+
 def _fmt(v: float | None, spec: str = ".3f") -> str:
     return "  n/a" if v is None or (isinstance(v, float) and np.isnan(v)) else format(v, spec)
 
@@ -382,8 +401,14 @@ def _report(
     comparisons: list[tuple[str, str]],
     n_bootstrap: int,
     seed: int,
+    scope: str = ALL_SCOPE,
+    budgets: Sequence[int | str] = BUDGETS,
 ) -> str:
-    lines = ["P4-3b walk-forward (protocol: docs/DECISIONS.md 2026-09-27 P0, 2026-09-29)", ""]
+    lines = [
+        "P4-3b walk-forward (protocol: docs/DECISIONS.md 2026-09-27 P0, 2026-09-29)",
+        f"Test-row scope: {scope} (P4-10, model.sealed_split; training rows are never filtered)",
+        "",
+    ]
     lines.append("Training per cutoff (expanding window, as-of-cutoff labels):")
     for name, info in infos.items():
         lines.append(
@@ -394,7 +419,7 @@ def _report(
     lines.append("")
     primary_names = [c.name for c in cutoffs_primary]
     lines.append(f"Primary pooled cutoffs: {', '.join(primary_names)}")
-    for budget in BUDGETS:
+    for budget in budgets:
         label = "R2's own count" if budget == "r2" else f"k={budget}"
         lines += ["", f"=== Budget: {label} ==="]
         lines.append(
@@ -463,13 +488,24 @@ def run_walk_forward(
     panel_root: Path = PANEL_ROOT,
     static_root: Path = STATIC_ROOT,
     matches_path: Path = SANCTIONS_MATCHES_PATH,
-    scores_path: Path = SCORES_PATH,
-    summary_path: Path = SUMMARY_PATH,
+    scores_path: Path | None = None,
+    summary_path: Path | None = None,
     use_tabicl: bool = True,
     n_bootstrap: int = N_BOOTSTRAP,
     seed: int = SEED,
     embedding_root: Path | None = EMBEDDING_ROOT / "seed=0",
+    scope: str = "dev",
+    unseal: bool = False,
 ) -> Path:
+    """Run every cutoff and report on `scope`'s test rows only (P4-10). ``"all"`` reproduces
+    P4-3b's report; it and ``"sealed"`` reveal sealed vessels and need ``unseal=True``."""
+    if scope != ALL_SCOPE and scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r}")
+    if scope in UNSEAL_REQUIRED and not unseal:
+        raise ValueError(f"scope {scope!r} reports sealed vessels; pass unseal=True (--unseal)")
+    suffix = "" if scope == ALL_SCOPE else f"_{scope}"
+    scores_path = scores_path or SCORES_PATH.with_name(f"{SCORES_PATH.stem}{suffix}.parquet")
+    summary_path = summary_path or SUMMARY_PATH.with_name(f"{SUMMARY_PATH.stem}{suffix}.txt")
     dirs = _window_dirs(panel_root)
     windows = [
         load_window(
@@ -487,20 +523,29 @@ def run_walk_forward(
     for test in windows[1:]:
         name = test.start.isoformat()
         scores, info = score_cutoff(windows, test, use_tabicl)
+        keep_rows = (
+            np.ones(len(test.imo), dtype=bool) if scope == ALL_SCOPE else scope_mask(test.imo, scope)
+        )
         labels = test.split.labels
-        info.update(n_test=len(labels), n_test_pos=int(labels.sum()))
+        info.update(n_test=int(keep_rows.sum()), n_test_pos=int(labels[keep_rows].sum()))
         infos[name] = info
         logger.info("cutoff %s: %s", name, info)
-        cut_all.append(Cutoff(name, labels, test.imo, scores))
+        cut_all.append(restrict(Cutoff(name, labels, test.imo, scores), keep_rows))
         cut_pkg.append(
-            Cutoff(name, labels, package_clusters(test.imo, labels, test.package), scores)
+            restrict(
+                Cutoff(name, labels, package_clusters(test.imo, labels, test.package), scores),
+                keep_rows,
+            )
         )
-        cut_sec.append(Cutoff(name, secondary_labels(test.split), test.imo, scores))
+        cut_sec.append(
+            restrict(Cutoff(name, secondary_labels(test.split), test.imo, scores), keep_rows)
+        )
         for m, s in scores.items():
             score_parts.append(
                 pd.DataFrame(
-                    {"cutoff": name, "model": m, "mmsi": test.split.mmsi.astype("int64"),
-                     "score": np.asarray(s, dtype=float), "label": labels}
+                    {"cutoff": name, "model": m,
+                     "mmsi": test.split.mmsi[keep_rows].astype("int64"),
+                     "score": np.asarray(s, dtype=float)[keep_rows], "label": labels[keep_rows]}
                 )
             )
 
@@ -531,6 +576,8 @@ def run_walk_forward(
         comparisons,
         n_bootstrap,
         seed,
+        scope=scope,
+        budgets=BUDGETS if scope == ALL_SCOPE else HALF_BUDGETS,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(summary, encoding="utf-8")
@@ -550,10 +597,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--no-tabicl", action="store_true", help="Skip the TabICLv2 challenger")
     p.add_argument("--n-bootstrap", type=int, default=N_BOOTSTRAP)
-    p.add_argument("--summary", default=str(SUMMARY_PATH))
-    p.add_argument("--scores", default=str(SCORES_PATH))
+    p.add_argument("--summary", default=None, help="Default: scope-suffixed summary path")
+    p.add_argument("--scores", default=None, help="Default: scope-suffixed scores path")
     p.add_argument("--embeddings-seed", type=int, default=0, help="P4-3j encoder seed")
     p.add_argument("--no-embeddings", action="store_true", help="Skip the P4-3j heads")
+    p.add_argument(
+        "--scope", default="dev", choices=[*SCOPES, ALL_SCOPE],
+        help="Test rows to report (P4-10): dev, dev_clean, sealed, or all (P4-3b)",
+    )
+    p.add_argument(
+        "--unseal", action="store_true",
+        help="Required for --scope sealed/all: reveals performance on sealed vessels",
+    )
     return p.parse_args(argv)
 
 
@@ -563,9 +618,11 @@ def main(argv: list[str] | None = None) -> None:
     run_walk_forward(
         use_tabicl=not args.no_tabicl,
         n_bootstrap=args.n_bootstrap,
-        summary_path=Path(args.summary),
-        scores_path=Path(args.scores),
+        summary_path=Path(args.summary) if args.summary else None,
+        scores_path=Path(args.scores) if args.scores else None,
         embedding_root=None if args.no_embeddings else EMBEDDING_ROOT / f"seed={args.embeddings_seed}",
+        scope=args.scope,
+        unseal=args.unseal,
     )
 
 

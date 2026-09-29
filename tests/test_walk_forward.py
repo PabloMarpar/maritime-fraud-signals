@@ -240,3 +240,23 @@ def test_a_comparisons_bootstrap_does_not_depend_on_the_others():
     again = _comparison_rng(0, "enc_logistic", "static_logistic", "r2").integers(0, 10**9, 5)
     other = _comparison_rng(0, "enc_lightgbm", "static_lightgbm", "r2").integers(0, 10**9, 5)
     assert first.tolist() == again.tolist() and first.tolist() != other.tolist()
+
+
+def test_restrict_keeps_only_masked_rows_of_every_array():
+    from model.pooled_evaluation import Cutoff
+    from model.walk_forward import restrict
+
+    c = Cutoff("x", np.array([1, 0, 1, 0], bool), np.array(["a", "b", "c", "d"]),
+               {"s": np.array([0.4, 0.3, 0.2, 0.1])})
+    r = restrict(c, np.array([True, False, True, False]))
+    assert r.labels.tolist() == [True, True]
+    assert r.clusters.tolist() == ["a", "c"]
+    assert r.scores["s"].tolist() == [0.4, 0.2]
+
+
+@pytest.mark.parametrize("scope", ["sealed", "all"])
+def test_sealed_scopes_refuse_to_run_without_unseal(scope, tmp_path):
+    from model.walk_forward import run_walk_forward
+
+    with pytest.raises(ValueError, match="unseal"):
+        run_walk_forward(panel_root=tmp_path, scope=scope)

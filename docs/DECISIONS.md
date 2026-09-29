@@ -2162,3 +2162,46 @@ _2026-09-29_ (session close)
   requires limitations in the README, not only here.
 - **P5-4's dossier confidence levels are unblocked:** they waited for a model that beats R2, and
   static LightGBM and TabICLv2 now do (at R2's budget and, by a wide margin, at small budgets).
+
+_2026-09-29_ (P4-10: the sealed IMO split -- pre-registered before any new label source or
+feature is scored)
+
+- **Why.** The author's goal is now the best achievable prediction, through five lines of work:
+  more label sources (P4-9), GFW port visits to Russian terminals (P4-11), implied Russian
+  loading from draught (P4-3h), cross-month vessel history (P4-12), and the model side (P4-13:
+  ensemble, PU learning, P4-3g's hazard framing). Picking the best of many attempts on the same
+  2024-08..2025-02 pool selects on that pool, and 71% of its positive rows are vessels examined
+  while designing P4-3c. A prospective test (score today, wait for new designations) was offered
+  and declined by the author: its result takes months.
+- **Groups** (`model/sealed_split.py`, by IMO, the same in every month): `examined` = the 260
+  IMOs frozen in `model/examined_imos.txt` (ever-sanctioned on the 2026-09-21 snapshot and in the
+  June or November population; identical to the website's `shadow.json`); `sealed` = every other
+  IMO with `crc32("p4-10|<imo>")` odd; `dev` = the rest. Primary pool (2024-08..2025-02 P4-0
+  populations, v1 labels), distinct IMOs / forward-positive IMOs / tankers: dev 4,966 / 58 /
+  1,000; examined 193 / 193 / 181; sealed 4,828 / 63 / 988.
+- **Rules.**
+  1. From now on a run reports test rows of scope `dev` (examined + dev) or `dev_clean` (dev
+     only). `model.walk_forward` defaults to `dev`; `sealed` and `all` refuse to run without
+     `--unseal`. Training rows are never filtered (training labels are as-of-cutoff public
+     designations; learning from a sealed vessel's past reveals nothing about performance on it).
+  2. Budgets inside a scope: R2's own count within the scope's rows, and k = 25/50/100 per cutoff
+     (half the vessels, so half the earlier 50/100/200).
+  3. Decision metric: pooled precision at k=50 in scope `dev`, with R2's budget next to it. A
+     change is adopted if it raises dev P@50 without lowering dev precision at R2's budget;
+     `dev_clean` is reported alongside. Intervals are reported but not required: dev decisions
+     are selections, not claims. Every configuration tried is logged in this file, and the count
+     is reported with the final result.
+  4. The sealed scoring runs ONCE (P4-14), after the five lines are finished, for candidates
+     named here before it runs: R2, `static_lightgbm` (P4-3b's reference) and at most two
+     finalists chosen on dev. Metrics: pooled precision at R2's budget and k = 25/50/100 within
+     sealed rows; paired IMO-clustered bootstrap vs R2 and vs `static_lightgbm` (P0 rule).
+     Primary label: P4-9's new version if adopted, v1 alongside.
+  5. `data/processed/walk_forward_scores.parquet` (P4-3b, scope `all`) holds sealed vessels'
+     scores and is never sliced by group. New runs write scope-suffixed files holding only their
+     scope's rows.
+- **Known limits of the seal.** (a) P4-3b's pooled numbers above mixed dev and sealed rows, so
+  the choice of the static columns, LightGBM and TabICLv2 was informed by aggregates that
+  included sealed vessels: the seal is clean for every decision from here on, not for those.
+  (b) Positives added by new label sources (P4-9) never counted as positives in any metric, so on
+  them the seal is fully clean; they get their own line in the final scoring. (c) 63 sealed
+  forward-positive IMOs (v1) is a small set, so the final intervals will be wide.
