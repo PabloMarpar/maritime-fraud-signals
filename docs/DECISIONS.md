@@ -2489,3 +2489,23 @@ _2026-09-29_ (P4-13 end-of-line rerun on the final feature set -- specified befo
   columns) and `ports_hist_ens` (rank mean of `ports_hist_pu_lightgbm` and `ports_hist_tabicl`,
   i.e. P4-13's ensemble with the adopted recipe in place of plain LightGBM). Each is compared with
   the bar `ports_hist_pu_lightgbm` on dev_clean. 2 more configurations.
+
+_2026-09-29_ (P4-13 final rerun result; P4-14 candidates named before the sealed scoring)
+
+- **Run.** `--labels v2 --feature-set ports_hist=ports+hist` with TabICLv2, dev_clean
+  (`outputs/wf_dev_clean_v2_final.txt`). Pooled vs the bar `ports_hist_pu_lightgbm`:
+  - k=50 [0.417]: **ports_hist_ens 0.340 (+0.023 [+0.000, +0.049])**; ports_hist_tabicl 0.326
+    (+0.009 [-0.014, +0.040]).
+  - k=25: ens 0.497 / tabicl 0.474 vs 0.491. k=100: 0.184 / 0.186 vs 0.184.
+  - R2's budget: ens 0.085 (+0.000), tabicl 0.083 (-0.001) vs 0.085.
+- **Decision (amended rule 3):** `ports_hist_ens` raises dev P@50 without lowering precision at
+  R2's budget -> **adopted, final bar 0.340 at k=50**. `ports_hist_tabicl` lowers precision at
+  R2's budget -> not adopted.
+- **Configurations tried on dev_clean: 11.**
+- **P4-14 candidates, fixed now, before any sealed number exists:** R2 and `static_lightgbm`
+  (pre-named references), and the two finalists **`ports_hist_ens`** (the dev_clean best) and
+  **`ports_hist_pu_lightgbm`** (the best single model, no TabICL). The sealed run is
+  `python -m model.walk_forward --scope sealed --unseal --labels v2 --no-embeddings
+  --feature-set ports_hist=ports+hist`, once, after `analyst-review` clears the chain. Primary
+  comparisons: each finalist vs R2 and vs `static_lightgbm` (P0 rule, IMO-clustered). Also
+  reported: the same with v1 labels, and a line restricted to positives that exist only under v2.
