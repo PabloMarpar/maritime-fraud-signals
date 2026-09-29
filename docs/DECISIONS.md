@@ -2455,3 +2455,14 @@ _2026-09-29_ (P4-11: GFW port visits landed; coverage gate GO)
   RUS port visit (confidence >= 3) between the crossings -- **0.64 < 0.80**, so per the
   pre-registration the columns are "eastern-Baltic loading, not specifically Russian". They were
   already not adopted; this does not reopen it.
+
+_2026-09-29_ (P4-11 result: port visits adopted)
+
+- **Run.** `--labels v2 --feature-set ports=ports`, dev_clean (`outputs/wf_dev_clean_v2_ports.txt`).
+- **Pooled dev_clean vs the bar static_pu_lightgbm:** k=50 [0.417] **ports_pu_lightgbm 0.297 vs
+  0.277 (+0.020 [-0.029, +0.057])**; k=25 0.429 vs 0.417; k=100 0.183 vs 0.164 (+0.019 [-0.003,
+  +0.040]); R2's budget 0.085 vs 0.081. The LightGBM recipe moves the same way (0.263 vs 0.243 at
+  k=50). Higher at every budget; no interval excludes 0 (dev_clean is small).
+- **Decision (amended rule 3): adopted.** New bar: **ports_pu_lightgbm, 0.297 at k=50.** P4-12 is
+  run on STATIC + ports + hist, as pre-registered.
+- **Configurations tried on dev_clean: 7** (+ ports x 2 recipes).
