@@ -22,6 +22,7 @@ matplotlib>=3.9
 # Ingestion
 httpx>=0.27
 websockets>=13.0
+openpyxl>=3.1  # ingest.sanctions_v2: NZ MFAT Russia Sanctions Register is .xlsx only
 
 # Dev
 pytest>=8.0

@@ -80,6 +80,12 @@ SANCTIONS_MATCHES_PATH = Path("data/identity/sanctions_matches.parquet")
 # sliced by model.sealed_split's groups (docs/DECISIONS.md 2026-09-29, P4-10).
 SCORES_PATH = Path("data/processed/walk_forward_scores.parquet")
 SUMMARY_PATH = Path("outputs/walk_forward_summary.txt")
+# P4-9: label versions. v1 = the frozen 2026-09-21 OFAC+UK snapshot; v2 adds EU/CA/NZ vessel
+# designations (docs/DECISIONS.md 2026-09-29) and is the primary label from P4-9 on.
+LABEL_VERSIONS: dict[str, tuple[Path, Path]] = {
+    "v1": (PANEL_ROOT, SANCTIONS_MATCHES_PATH),
+    "v2": (Path("data/processed/panel_v2"), Path("data/identity/sanctions_matches_v2.parquet")),
+}
 
 # P4-3c's frozen feature set (docs/DECISIONS.md 2026-09-27). is_tanker/is_foc come from the panel
 # (model.isolation_forest.CONTEXT_FEATURES_SQL), imo_serial from the panel's imo, the rest from
@@ -540,15 +546,16 @@ def _report(
         "",
         "Notes: n/s = not scorable (no training positive before that cutoff).",
         "rule_tanker_dest is descriptive only (not a pre-registered variant). Scores are",
-        "rankings, not probabilities. Positives are vessels on the 2026-09-21 sanctions snapshot.",
+        "rankings, not probabilities. Positives: the label version in the header (v1 = 2026-09-21",
+        "OFAC+UK snapshot; v2 adds EU/CA/NZ vessel designations, same 2026-09-21 horizon).",
     ]
     return "\n".join(lines) + "\n"
 
 
 def run_walk_forward(
-    panel_root: Path = PANEL_ROOT,
+    panel_root: Path | None = None,
     static_root: Path = STATIC_ROOT,
-    matches_path: Path = SANCTIONS_MATCHES_PATH,
+    matches_path: Path | None = None,
     scores_path: Path | None = None,
     summary_path: Path | None = None,
     use_tabicl: bool = True,
@@ -557,6 +564,7 @@ def run_walk_forward(
     embedding_root: Path | None = EMBEDDING_ROOT / "seed=0",
     scope: str = "dev_clean",
     unseal: bool = False,
+    labels: str = "v1",
 ) -> Path:
     """Run every cutoff and report on `scope`'s test rows only (P4-10). ``"all"`` reproduces
     P4-3b's report; it and ``"sealed"`` reveal sealed vessels and need ``unseal=True``."""
@@ -564,7 +572,11 @@ def run_walk_forward(
         raise ValueError(f"unknown scope {scope!r}")
     if scope in UNSEAL_REQUIRED and not unseal:
         raise ValueError(f"scope {scope!r} reports sealed vessels; pass unseal=True (--unseal)")
-    suffix = "" if scope == ALL_SCOPE else f"_{scope}"
+    if labels not in LABEL_VERSIONS:
+        raise ValueError(f"unknown label version {labels!r}")
+    panel_root = panel_root or LABEL_VERSIONS[labels][0]
+    matches_path = matches_path or LABEL_VERSIONS[labels][1]
+    suffix = ("" if scope == ALL_SCOPE else f"_{scope}") + ("" if labels == "v1" else f"_{labels}")
     scores_path = scores_path or SCORES_PATH.with_name(f"{SCORES_PATH.stem}{suffix}.parquet")
     summary_path = summary_path or SUMMARY_PATH.with_name(f"{SUMMARY_PATH.stem}{suffix}.txt")
     dirs = _window_dirs(panel_root)
@@ -640,7 +652,7 @@ def run_walk_forward(
         comparisons,
         n_bootstrap,
         seed,
-        scope=scope,
+        scope=f"{scope}, labels {labels}",
         budgets=BUDGETS if scope == ALL_SCOPE else HALF_BUDGETS,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -669,6 +681,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--scope", default="dev_clean", choices=[*SCOPES, ALL_SCOPE],
         help="Test rows to report (P4-10): dev_clean (the decision scope), dev, sealed, or all",
     )
+    p.add_argument("--labels", default="v1", choices=sorted(LABEL_VERSIONS),
+                   help="Label version (P4-9): v1 = OFAC+UK snapshot, v2 = + EU/CA/NZ")
     p.add_argument(
         "--unseal", action="store_true",
         help="Required for --scope sealed/all: reveals performance on sealed vessels",
@@ -687,6 +701,7 @@ def main(argv: list[str] | None = None) -> None:
         embedding_root=None if args.no_embeddings else EMBEDDING_ROOT / f"seed={args.embeddings_seed}",
         scope=args.scope,
         unseal=args.unseal,
+        labels=args.labels,
     )
 
 

@@ -2370,3 +2370,24 @@ _2026-09-29_ (P4-13 first run: static columns, v1 labels, dev_clean)
   recipe (`<set>_lightgbm`, `<set>_pu_lightgbm`), and judged against the current bar. This adds
   one configuration per feature set, disclosed here.
 - **Configurations tried on dev_clean so far: 3** (ens, PU, hazard).
+
+_2026-09-29_ (P4-9: labels v2 landed and adopted -- before any model is scored with them)
+
+- **Built.** `ingest/sanctions_v2.py` -> `data/reference/sanctions_v2.parquet` = the 2,205 v1 rows
+  unchanged + `eu_vessels` 671 (Danish Maritime Authority's list of EU vessel designations; dates
+  agree 671/671 with OpenSanctions' `eu_sanctions` mirror; package-date months 2024-06..2026-07),
+  `ca` 731 (Global Affairs Canada SEMA XML, 5 excluded for non-numeric IMO), `nz` 210 (MFAT
+  Russia Sanctions Register, "Ships" sheet). Dates capped at 2026-09-21 (same horizon as v1).
+  Australia (DFAT blocks automated downloads) and Switzerland (no bulk export with per-vessel
+  dates found) are not included.
+- **Matches.** `process.sanctions_match` over `data/identity/mmsi_imo/window=*/part-0.parquet`
+  (the same invocation reproduces the existing v1 table exactly: 728 rows, 0 differences) ->
+  `data/identity/sanctions_matches_v2.parquet`: 478 matched IMOs vs v1's 459; **19 IMOs are new
+  and 94 v1 IMOs get an earlier first designation** (an EU/CA/NZ listing before OFAC/UK's).
+- **Adopted as the primary label, on validity grounds, before any model sees it:** these are
+  real designations; under v1 an EU/CA/NZ-only vessel counted as a clean negative and a vessel
+  listed by the EU months before OFAC/UK counted as "not yet sanctioned". From here on dev_clean
+  decisions use v2, and the bar is re-measured under v2 (a re-run of existing models, not a new
+  configuration). v1 is kept for comparison in the final report.
+- **The P4-10 split is unchanged** (examined stays the frozen v1 list); the 19 new IMOs fall into
+  dev or sealed by the hash.
