@@ -305,3 +305,19 @@ def test_rank_mean_averages_percentile_ranks():
     assert rank_mean(np.array([3.0, 1.0, 2.0]), np.array([0.1, 0.3, 0.2])).tolist() == [
         pytest.approx(2 / 3), pytest.approx(2 / 3), pytest.approx(2 / 3)
     ]
+
+
+def test_feature_set_spec_and_columns():
+    from model.walk_forward import (
+        LR_COLUMNS,
+        PORT_COLUMNS,
+        STATIC_COLUMNS,
+        feature_set_columns,
+        parse_feature_set,
+    )
+
+    assert parse_feature_set("pb=ports+baltic") == ("pb", ("ports", "baltic"))
+    assert feature_set_columns(("ports", "baltic")) == (*STATIC_COLUMNS, *PORT_COLUMNS, *LR_COLUMNS)
+    for bad in ("ports", "x=", "x=nope"):
+        with pytest.raises(ValueError):
+            parse_feature_set(bad)

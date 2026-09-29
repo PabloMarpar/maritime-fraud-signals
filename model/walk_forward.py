@@ -121,6 +121,24 @@ PU_UNLABELED_RATIO = 5
 HAZARD_HORIZON_DAYS = 182
 P4_13_MODELS = ("ens_lgbm_tabicl", "static_pu_lightgbm", "static_hazard_lightgbm")
 
+# P4-11 / P4-3h / P4-12 column groups, each a per-window partition keyed by mmsi (pre-registered
+# in docs/DECISIONS.md 2026-09-29). A feature set is STATIC_COLUMNS plus one or more groups, run
+# with both recipes as `<set>_lightgbm` and `<set>_pu_lightgbm`.
+PORT_COLUMNS = (
+    "gfw_resolved", "pv_n_total", "pv_n_rus", "pv_any_rus", "pv_n_rus_oil", "pv_days_since_rus",
+    "pv_share_south", "pv_n_sanctioned_states",
+)
+LR_COLUMNS = ("lr_n_trips", "lr_n_laden_returns", "lr_laden_share", "lr_rate_per_30d")
+HIST_COLUMNS = (
+    "hist_n_flags_730d", "hist_n_names_730d", "hist_n_mmsi_730d", "hist_flag_age_days",
+    "hist_ais_age_days", "hist_to_foc_730d", "hist_prior_windows_seen", "hist_prior_dest_russia",
+)
+EXTRA_GROUPS: dict[str, tuple[Path, tuple[str, ...]]] = {
+    "ports": (Path("data/processed/port_visits"), PORT_COLUMNS),
+    "baltic": (Path("data/processed/baltic_trips"), LR_COLUMNS),
+    "hist": (Path("data/processed/history"), HIST_COLUMNS),
+}
+
 PRIMARY_FIRST_CUTOFF = date(2024, 8, 1)
 # P4-3j: the vessel encoder was pretrained on 2024-04..07, so its embeddings are scored only from
 # this cutoff on (docs/DECISIONS.md 2026-09-29). Same names as model.vessel_encoder.EMB_COLUMNS,
@@ -174,7 +192,11 @@ def _window_dirs(root: Path) -> list[Path]:
 
 
 def load_window(
-    panel_path: Path, static_path: Path, matches_path: Path, embedding_path: Path | None = None
+    panel_path: Path,
+    static_path: Path,
+    matches_path: Path,
+    embedding_path: Path | None = None,
+    extra_groups: Sequence[str] = (),
 ) -> Window:
     """Load one window, joining the static columns, the designation package and (if
     `embedding_path` exists) the P4-3j embedding by mmsi, in ``load_split``'s row order."""
@@ -189,6 +211,19 @@ def load_window(
             if has_emb
             else ""
         )
+        extra_cols: list[str] = []
+        extra_sql, extra_join = "", ""
+        for i, g in enumerate(extra_groups):
+            root, cols = EXTRA_GROUPS[g]
+            path = root / panel_path.parent.name / "part-0.parquet"
+            if not path.exists():
+                raise FileNotFoundError(f"{path}: feature group {g!r} not built for this window")
+            extra_cols += cols
+            extra_sql += "".join(f", CAST(x{i}.{c} AS DOUBLE) AS {c}" for c in cols)
+            extra_join += (
+                f" LEFT JOIN read_parquet('{path.as_posix()}', hive_partitioning=false) x{i}"
+                f" ON p.mmsi = x{i}.mmsi"
+            )
         data = con.execute(
             f"""
             WITH pop AS (
@@ -207,10 +242,10 @@ def load_window(
                 GROUP BY m.imo, f.d
             )
             SELECT p.mmsi, p.imo, CAST(TRY_CAST(p.imo AS BIGINT) AS DOUBLE) AS imo_serial,
-                   coalesce(k.package, '') AS package, {static_sql}{emb_sql}
+                   coalesce(k.package, '') AS package, {static_sql}{emb_sql}{extra_sql}
             FROM pop p
             LEFT JOIN read_parquet('{static_path.as_posix()}') s ON p.mmsi = s.mmsi
-            {emb_join}
+            {emb_join}{extra_join}
             LEFT JOIN package k ON p.imo = k.imo
             ORDER BY p.mmsi, p.year_month
             """
@@ -220,7 +255,7 @@ def load_window(
     if not np.array_equal(np.asarray(data["mmsi"]), split.mmsi):
         raise ValueError(f"{panel_path}: static join changed the row set or order")
     panel_columns = frozenset(split.features)
-    for c in ("imo_serial", *_FROM_STATIC_TABLE, *(EMB_COLUMNS if has_emb else ())):
+    for c in ("imo_serial", *_FROM_STATIC_TABLE, *(EMB_COLUMNS if has_emb else ()), *extra_cols):
         split.features[c] = np.ma.filled(np.ma.asarray(data[c]).astype(float), np.nan)
     return Window(
         split=split,
@@ -378,7 +413,10 @@ def detector_columns(windows: Sequence[Window], variant: str) -> list[str]:
 
 
 def score_cutoff(
-    windows: Sequence[Window], test: Window, use_tabicl: bool
+    windows: Sequence[Window],
+    test: Window,
+    use_tabicl: bool,
+    feature_sets: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """Every score for one test window, plus bookkeeping (training rows/positives)."""
     cutoff = test.start
@@ -412,9 +450,29 @@ def score_cutoff(
     if use_tabicl:
         scores["tabicl"] = tabicl_scores(x_train, y_train, x_test)
         scores["ens_lgbm_tabicl"] = rank_mean(scores["static_lightgbm"], scores["tabicl"])
+    for name, groups in (feature_sets or {}).items():
+        cols = feature_set_columns(groups)
+        xtr, ytr = training_set(windows, cutoff, cols)
+        xte = test_matrix(test, cols)
+        scores[f"{name}_lightgbm"] = lightgbm_scores(xtr, ytr, xte)
+        scores[f"{name}_pu_lightgbm"] = pu_bagging_scores(xtr, ytr, xte)
     if cutoff >= ENCODER_FIRST_CUTOFF and all(EMB_COLUMNS[0] in w.split.features for w in windows):
         scores.update(encoder_scores(windows, test, use_tabicl))
     return scores, info
+
+
+def feature_set_columns(groups: Sequence[str]) -> tuple[str, ...]:
+    """STATIC_COLUMNS plus each named group's columns, in order."""
+    return (*STATIC_COLUMNS, *(c for g in groups for c in EXTRA_GROUPS[g][1]))
+
+
+def parse_feature_set(spec: str) -> tuple[str, tuple[str, ...]]:
+    """``"name=group+group"`` -> (name, groups), e.g. ``"ports=ports"``."""
+    name, _, groups = spec.partition("=")
+    gs = tuple(g for g in groups.split("+") if g)
+    if not name or not gs or any(g not in EXTRA_GROUPS for g in gs):
+        raise ValueError(f"bad feature set {spec!r}; groups: {sorted(EXTRA_GROUPS)}")
+    return name, gs
 
 
 def encoder_scores(windows: Sequence[Window], test: Window, use_tabicl: bool) -> dict[str, np.ndarray]:
@@ -565,6 +623,7 @@ def run_walk_forward(
     scope: str = "dev_clean",
     unseal: bool = False,
     labels: str = "v1",
+    feature_sets: dict[str, tuple[str, ...]] | None = None,
 ) -> Path:
     """Run every cutoff and report on `scope`'s test rows only (P4-10). ``"all"`` reproduces
     P4-3b's report; it and ``"sealed"`` reveal sealed vessels and need ``unseal=True``."""
@@ -587,6 +646,7 @@ def run_walk_forward(
             static_root / d.name / "part-0.parquet",
             matches_path,
             embedding_root / d.name / "part-0.parquet" if embedding_root is not None else None,
+            extra_groups=sorted({g for gs in (feature_sets or {}).values() for g in gs}),
         )
         for d in dirs
     ]
@@ -596,7 +656,7 @@ def run_walk_forward(
     score_parts = []
     for test in windows[1:]:
         name = test.start.isoformat()
-        scores, info = score_cutoff(windows, test, use_tabicl)
+        scores, info = score_cutoff(windows, test, use_tabicl, feature_sets)
         keep_rows = (
             np.ones(len(test.imo), dtype=bool) if scope == ALL_SCOPE else scope_mask(test.imo, scope)
         )
@@ -630,6 +690,7 @@ def run_walk_forward(
         "lgbm_detectors_context", "lgbm_detectors_context_noexp", "rule_tanker_dest",
         "enc_logistic", "enc_lightgbm", "enc_tabicl", "emb_logistic",
         *P4_13_MODELS,
+        *(f"{n}_{r}" for n in (feature_sets or {}) for r in ("lightgbm", "pu_lightgbm")),
     ]
     models = [m for m in models if any(m in c.scores for c in cut_all)]
     comparisons = [(m, "r2") for m in models if m not in ("r2", "rule_tanker_dest")]
@@ -638,6 +699,10 @@ def run_walk_forward(
     comparisons.append(("static_lightgbm", "static_logistic"))
     # P4-13, pre-registered: each model-side variant against the current best static model.
     comparisons += [(m, "static_lightgbm") for m in P4_13_MODELS if m in models]
+    # P4-11/P4-3h/P4-12: each feature set against the current bar and within its own recipe.
+    for n in feature_sets or {}:
+        comparisons += [(f"{n}_pu_lightgbm", "static_pu_lightgbm"),
+                        (f"{n}_lightgbm", "static_lightgbm")]
     # P4-3j, pre-registered: does the embedding add anything to each static recipe?
     for enc, base in (("enc_logistic", "static_logistic"), ("enc_lightgbm", "static_lightgbm"),
                       ("enc_tabicl", "tabicl")):
@@ -682,6 +747,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--scope", default="dev_clean", choices=[*SCOPES, ALL_SCOPE],
         help="Test rows to report (P4-10): dev_clean (the decision scope), dev, sealed, or all",
     )
+    p.add_argument(
+        "--feature-set", action="append", default=[], metavar="NAME=GROUP[+GROUP]",
+        help=f"Extra feature set on top of the static columns; groups: {sorted(EXTRA_GROUPS)}",
+    )
     p.add_argument("--labels", default="v1", choices=sorted(LABEL_VERSIONS),
                    help="Label version (P4-9): v1 = OFAC+UK snapshot, v2 = + EU/CA/NZ")
     p.add_argument(
@@ -703,6 +772,7 @@ def main(argv: list[str] | None = None) -> None:
         scope=args.scope,
         unseal=args.unseal,
         labels=args.labels,
+        feature_sets=dict(parse_feature_set(s) for s in args.feature_set) or None,
     )
 
 
