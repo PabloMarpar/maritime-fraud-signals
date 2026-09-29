@@ -2272,3 +2272,21 @@ _2026-09-29_ (P4-10 reference on `dev_clean`, v1 labels -- the bar for P4-9..P4-
   dev_clean so far: 0 new (this is the reference).
 - **Reading.** On vessels nobody examined, the honest small-budget precision is ~0.2-0.3, not
   P4-3b's pooled 0.57-0.71 at k=50 (which the examined vessels inflated), and still 3-5x R2.
+
+_2026-09-29_ (P4-13: model-side variants -- pre-registered before they are run)
+
+Run first on the frozen static columns (v1 labels, dev_clean), and again at the end on the final
+feature set. Each is compared with `static_lightgbm` on dev_clean (amended rule 3). Every other
+setting is P4-3's PARAMS.
+- **`ens_lgbm_tabicl`**: per cutoff, the mean of the test-row percentile ranks of
+  `static_lightgbm` and `tabicl` (average ranks for ties). No labels involved.
+- **`static_pu_lightgbm`** (bagging PU, Mordelet & Vert 2014): 50 bags; each bag = every training
+  positive + 5x as many training non-positives drawn uniformly without replacement (all of them
+  if fewer), LightGBM seed = bag index; score = mean P over bags. Treats non-positives as
+  unlabelled rather than as clean negatives (EU-only and future designations sit among them).
+- **`static_hazard_lightgbm`** (P4-3g's discrete-time framing, adapted): a training row of window
+  w is positive iff designated in (w.end, w.end + 182 days] and before the cutoff; a non-positive
+  row is kept only if w.end + 182 days < cutoff (its horizon is fully observed), else dropped as
+  censored. 182 days rather than P4-3g's 1 or 3 months because the test label is long-horizon
+  (designated any time after window_end); h = 1/3 answer a timing question this metric does not
+  measure, and are not run.
