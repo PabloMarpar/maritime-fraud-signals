@@ -193,15 +193,18 @@ def resolve_range(
     try:
         _resolve(con, partitions)
 
-        (n_mmsi,) = con.execute("SELECT count(DISTINCT mmsi) FROM final").fetchone()
+        # Materialized once: every query against the `final` view re-scans every clean partition
+        # in the window, and the four counts plus the write used to do that five times.
+        con.execute("CREATE OR REPLACE TEMP TABLE _final AS SELECT * FROM final")
+        (n_mmsi,) = con.execute("SELECT count(DISTINCT mmsi) FROM _final").fetchone()
         (n_with_imo,) = con.execute(
-            "SELECT count(DISTINCT mmsi) FROM final WHERE NOT is_orphaned"
+            "SELECT count(DISTINCT mmsi) FROM _final WHERE NOT is_orphaned"
         ).fetchone()
         (n_orphaned,) = con.execute(
-            "SELECT count(*) FROM final WHERE is_orphaned"
+            "SELECT count(*) FROM _final WHERE is_orphaned"
         ).fetchone()
         (n_reused,) = con.execute(
-            "SELECT count(DISTINCT mmsi) FROM final WHERE is_reused"
+            "SELECT count(DISTINCT mmsi) FROM _final WHERE is_reused"
         ).fetchone()
         logger.info(
             "Resolved %d distinct MMSI over %d day(s): %d with a valid IMO, "
@@ -213,7 +216,7 @@ def resolve_range(
             n_reused,
         )
 
-        atomic_write_parquet(con, "SELECT * FROM final", out_path)
+        atomic_write_parquet(con, "SELECT * FROM _final", out_path)
     finally:
         con.close()
     return out_path

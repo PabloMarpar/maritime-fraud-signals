@@ -184,9 +184,14 @@ def reconstruct_range(
     try:
         _reconstruct(con, partitions, gap_hours)
 
-        (n_mmsi,) = con.execute("SELECT count(DISTINCT mmsi) FROM points").fetchone()
-        (n_voyages,) = con.execute("SELECT count(*) FROM voyages").fetchone()
-        (n_points,) = con.execute("SELECT count(*) FROM points").fetchone()
+        # Materialized once: each query against the `voyages`/`points` views re-runs the lag +
+        # running-sum windows over every point in the window (~300M rows for a month), and the
+        # three counts plus the write used to do that four times. Every point belongs to exactly
+        # one voyage, so all three counts follow from this small table.
+        con.execute("CREATE OR REPLACE TEMP TABLE _voyages AS SELECT * FROM voyages")
+        (n_mmsi, n_voyages, n_points) = con.execute(
+            "SELECT count(DISTINCT mmsi), count(*), coalesce(sum(point_count), 0) FROM _voyages"
+        ).fetchone()
         avg_points = n_points / n_voyages if n_voyages else 0.0
         logger.info(
             "Reconstructed %d voyage(s) for %d distinct MMSI over %d day(s) "
@@ -200,7 +205,7 @@ def reconstruct_range(
 
         atomic_write_parquet(
             con,
-            "SELECT * FROM voyages ORDER BY mmsi, voyage_seq",
+            "SELECT * FROM _voyages ORDER BY mmsi, voyage_seq",
             voyages_path,
         )
     finally:
