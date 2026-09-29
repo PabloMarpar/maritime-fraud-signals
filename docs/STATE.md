@@ -357,45 +357,14 @@ _Last updated: 2026-09-29_
 
 ## In progress
 
-**P4-3b: building every month the DMA archive serves (2024-04..2025-02), author's call 2026-09-25.**
-Runs unattended, launched via WMI (survives the Claude session). Progress:
-`outputs/logs/build_archive_windows.status` (START/OK/FAIL per step, `DONE` at the end), per-step
-logs next to it (appended across runs -- an old `Traceback` there is not the current run).
-- **Running (2026-09-28 19:45):** only `scripts/build_archive_windows.sh` (bash PID 30940,
-  started 12:50): windows one at a time (April, May, June, Jul..Oct, Nov verify, Dec..Feb),
-  `detect.gaps` per window, then `process.sanctions_match --force` and one panel per window.
-  **April and May are marked FAIL on purpose**: both were stopped by PID (17:36 and 19:40) because
-  they ran the old slow code; the script skips a failed window and goes on. June verified in 51 s;
-  July started 19:40 with all three fixes below.
-- **The April/May rerun AND a shutdown are scheduled:** waiter powershell PID 13648 (via WMI,
-  19:52; script copy in the session scratchpad, `rerun_then_shutdown.ps1`, transcript
-  `outputs/logs/rerun_then_shutdown.log`) polls PID 30940 every minute; when it exits it logs
-  `START rerun_after_build`, runs the script once more, then `shutdown /s /t 300` (cancel with
-  `shutdown /a`). Cancel the whole plan by killing PID 13648. (A first `Wait-Process` waiter,
-  PID 23428, died silently -- that pattern is unreliable here.)
-- **All downloads are done:** `prefetch2_winter` OK 17:08, `prefetch2_summer` OK 19:38. Every day
-  2024-03-02..2025-02-26 (362) is clean on disk.
-- **Three speed fixes this session** (`docs/DECISIONS.md` 2026-09-28, commits 83da129, d646e1c,
-  943ab68): `on_land` land split into a 0.1-degree grid (one day 44-63 s -> ~1.5 s, identical rows);
-  `on_land` rows kept in DuckDB instead of `executemany` (~1 h per window saved, identical rows);
-  `python -m pipeline.window` runs every producer in a fresh process (the Windows heap lock had
-  slowed April's `on_land` and November's `sts` 10x+ inside the long-lived process). Earlier
-  speedups: `process.clean` 101 s -> 5 s/day; `process.tracks` 19 min -> ~3 min;
-  `process.identity` materialize-once (committed c27bffe 2026-09-29 after a real-window check:
-  June `mmsi_imo` identical, voyages identical except 250 tied endpoints -- see Open questions).
-- **Open issue 2: unexplained deaths.** `prefetch_2024-07` died at 13:28 (no traceback, no
-  Windows crash or low-memory event); the 11:36 build died at ~11:41 together with a local relay,
-  and the web session confirms it did not kill them. Cause unknown.
-- **How to relaunch** (after a shutdown or death): validate the last written day with DuckDB and
-  delete a truncated partition (only days written before commit 136adb3 can be truncated), then
-  PowerShell `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments
-  @{CommandLine = '"C:/Program Files/Git/bin/bash.exe" scripts/build_archive_windows.sh';
-  CurrentDirectory = '<repo root>'}`. Every step is idempotent. Never `Start-Process` from a
-  Claude session: Windows kills it when the session exits.
-- **Rules while it runs:** never start a second build over `data/`; never kill `python`/`bash` by
-  name, only by PID; do not edit `scripts/build_archive_windows.sh` (bash reads it as it runs);
-  other work may read `data/` via DuckDB (~4 threads), not write there. Do not prune clean data
-  (`features.static` and P4-3h need it). ~213 GB free at close, enough.
+Nothing running. **P4-3b's archive build finished 2026-09-29 04:59** (`DONE`, no FAIL, all 11
+windows 2024-04..2025-02 plus panels); every day 2024-03-02..2025-02-26 is clean on disk. If a
+window ever needs rebuilding: `scripts/build_archive_windows.sh` via WMI
+(`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine =
+'"C:/Program Files/Git/bin/bash.exe" scripts/build_archive_windows.sh'; CurrentDirectory = '<repo
+root>'}`; never `Start-Process` from a Claude session), one build over `data/` at a time, kill by
+PID only, never edit the script while it runs. Do not prune clean data (P4-3h and P4-3j need it).
+Unexplained process deaths during the build (2026-09-28) were never explained.
 
 ## Next up
 
@@ -403,10 +372,15 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
    no FAIL; panels exist for all 11 windows. `features.static` built for all 11 windows
    (`data/processed/static/window=.../`, 16-30 s each, no errors): 7,648-25,187 mmsi per window
    (summer peak), June's 21,146 matches its panel.
-2. **Walk-forward (rest of P4-3b):** extend `model.lightgbm_risk` to every monthly cutoff,
-   scored through `model.pooled_evaluation` (the frozen P4-3e protocol). Variants: R2, P4-3's
-   pre-registered ones, and the frozen P4-3c `static` variant (logistic regression, plus LightGBM
-   as secondary). Report results per cutoff and pooled; run `analyst-review` afterwards.
+2. **DONE 2026-09-29: the walk-forward (P4-3b) and TabICLv2 (P4-3i).** `model/walk_forward.py`,
+   results in `outputs/walk_forward_summary.txt` (git-ignored; numbers in `docs/DECISIONS.md`
+   2026-09-29). Pooled 2024-08..2025-02 at R2's budget (ceiling 0.216): R2 0.180, static logistic
+   0.189 (fragile win), static LightGBM 0.196, **TabICLv2 0.198** (robust), detectors alone 0.145
+   (lose). At k=50: 0.178 vs 0.566 / 0.709 / 0.680. `analyst-review`: no temporal leak; one
+   blocker found and fixed (static columns leaked into the detector variants).
+   **Open from that review:** the anchorage-mask glob (see Open questions) -- fix, rebuild
+   sts/behaviour/panels, rerun the walk-forward; affects only the lgbm_detectors* rows.
+   PyTorch 2.11+cu128 and tabicl 2.2.0 are installed (GPU verified).
 3. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
    its pre-designation months, giving ~100 positives instead of 16. This also explains why adding
    post-designation rows hurt. Pre-register it before running.
@@ -430,11 +404,10 @@ logs next to it (appended across runs -- an old `Traceback` there is not the cur
      Use `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
      local relay (`python -m ingest.aisstream`, or `npx wrangler dev --port 8765` in `relay/`).
      A plain build targets the public relay.
-6. Then P4-4 (calibration). Challengers from the research report:
-   - TabPFN v2 / TabICL (licence-clean);
-   - bagging PU (averaging models trained on resampled vessels whose label is unknown);
-   - a trajectory encoder without coordinates, as a probable null.
-   All need PyTorch >= 2.7 with cu128 wheels for the RTX 5060 Ti (sm_120).
+6. **P4-3j, our own vessel encoder** (author's request, design pre-registered 2026-09-29): track
+   transformer without coordinates + detector-event transformer + static MLP, self-supervised on
+   2024-04..2024-07 only, logistic head vs the static logistic. Expected null.
+   Then P4-4 (calibration) and bagging PU as a remaining cheap challenger.
 7. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
    Flag/name changes mostly happen AFTER designation (CREA), so they leak unless restricted to
    well before the cutoff. Owner/manager networks are out (P4-3f NO-GO).
@@ -451,6 +424,12 @@ design, not model architecture.
 
 ## Open questions
 
+- **`pipeline/window.py` passes a `window=*` anchorage-mask glob to `detect.sts` and
+  `detect.behaviour`, read with no time filter** (found by `analyst-review` 2026-09-29). Windows
+  built after later masks existed (2024-04/05 with every mask; 2024-07..10 with November's) used
+  future AIS in their anchorage mask -- future data, not labels, and only the detector columns.
+  Fix: only masks with window_end <= the window's own; then rebuild sts, behaviour and panels for
+  the archive windows and rerun `model.walk_forward`.
 - **`detect/gaps.py`, `detect/spoofing.py` and `detect/behaviour.py` still default their voyages
   input to the `window=*` glob.** `voyage_seq` restarts at 1 per window, so `lead() OVER (PARTITION
   BY mmsi ORDER BY voyage_seq)` over the glob would pair voyages across windows. No current output

@@ -1963,3 +1963,55 @@ archive-month score exists)
     Primary comparison: vs the static logistic alone (does the embedding add anything?), P0
     rule; also vs R2. **Expected: probably null** (research report's "trajectory encoder without
     coordinates"); a null is reported, not buried.
+
+_2026-09-29_ (P4-3b + P4-3i result: the walk-forward, 10 cutoffs, pooled 2024-08..2025-02)
+
+- **Run.** `python -m model.walk_forward` (commit 43c5a58), ~4 min incl. TabICLv2 on the GPU.
+  Before scoring any archive month it reproduced P4-3c's June -> November logistic exactly
+  (P@50/100/200/574 = 0.640/0.550/0.450/0.223). Training positives per primary cutoff grow
+  23 -> 428 (a later-designated vessel is positive in every earlier window's row). 2024-05 has no
+  training positive (n/s); 2024-06/07 have 2 each, both non-tanker, so learned models rank
+  non-tankers first there (below random; expected, outside the primary pool).
+- **Primary budget (R2's own count), pooled, ceiling 0.216, IMO-clustered 95% CI of the
+  difference vs R2 (0.180):** static_logistic 0.189 (+0.009 [+0.001, +0.018]); static_lightgbm
+  0.196 (+0.016 [+0.008, +0.025]); **tabicl 0.198 (+0.018 [+0.009, +0.028])**; lgbm_context
+  reproduces R2 (0.180); lgbm_detectors 0.145 (**loses**, -0.035 [-0.048, -0.022]);
+  lgbm_detectors_context 0.193 (+0.013 [+0.006, +0.021]); no-exposure variant 0.190
+  (+0.010 [+0.003, +0.018]). tabicl - static_logistic +0.009 [+0.005, +0.015].
+- **Robustness (primary budget).** tabicl, static_lightgbm and both detectors_context variants
+  keep their win under package clustering, the 12-month label and without 2024-11.
+  **static_logistic's win is fragile:** its interval includes 0 under package clustering
+  ([-0.003, +0.023]) and without 2024-11 ([-0.002, +0.015]); per P0 it is reported with that
+  caveat.
+- **Small budgets (pooled, vs R2 0.178):** k=50: static_logistic 0.566, static_lightgbm 0.709,
+  tabicl 0.680, detectors_context 0.476, detectors 0.230; k=100: 0.483 / 0.587 / 0.577 / 0.452 /
+  0.221; k=200: 0.350 / 0.413 / 0.425 / 0.378 / 0.199. Every static-column model's interval vs R2
+  excludes 0 at every budget.
+- **Verdict.** Per `CLAUDE.md`'s bar, the static models (and TabICLv2) beat R2 at the matched
+  budget, by little because the ceiling leaves little room (+0.036 at most), and by a lot at
+  small alert budgets. The behavioural detectors alone still lose to R2 (P4-0's finding again);
+  added to R2's inputs they help a little. **P4-3i:** TabICLv2 beats the linear model, as
+  pre-registered; but it is level with static_lightgbm (0.198 vs 0.196, not a pre-registered
+  comparison), so the honest reading is "nonlinear beats linear on these columns", not "a
+  pretrained transformer adds something a tree model does not".
+- **`analyst-review` (same day).** No temporal leak: 0 training-positive IMO/MMSI in any test
+  population; test positives appear in training only as negatives (works against the models);
+  pooled precisions recomputed independently in SQL; LightGBM seed spread 0.1957-0.1977.
+  - **Blocker, fixed:** the first run (97f0661) fed the static columns into P4-3's detector
+    variants (`load_window` added them to `split.features` before `variant_columns` listed its
+    columns), inflating lgbm_detectors to 0.70 at k=50. Fixed in 43c5a58 with a regression test;
+    the numbers above are the rerun. Static and TabICL rows were unaffected.
+  - **Should-fix, OPEN:** `pipeline/window.py` passes a `window=*` anchorage-mask glob to `sts`
+    and `behaviour`, read without a time filter, so archive windows built after later masks
+    existed used future AIS (not labels) in the anchorage mask. Affects only detector columns
+    (so only the lgbm_detectors* rows); fix = restrict to masks with window_end <= the window's
+    own, then rebuild sts/behaviour/panels.
+  - **Vessel-level snooping:** 71% (608/856) of the primary pool's test-positive rows are June or
+    November forward-positives, the vessels seen while designing the regexes and freezing the
+    column set, so "without 2024-11" does not remove it. Excluding those IMOs (post hoc,
+    exploratory): at R2's budget the ceiling drops to 0.071 and nothing is distinguishable; at
+    k=50 R2 0.063 vs 0.20 / 0.31 / 0.30 (logistic / lightgbm / tabicl), so the small-budget gain
+    survives. Aug-Feb are not "clean" tests of the column design.
+  - **Notes:** 9 comparisons x 4 budgets with no multiplicity correction; CIs are conditional on
+    one fit per cutoff (no training-row refit bootstrap); labels are effectively OFAC + UK (EU
+    contributes 2 records), so EU-only vessels count as negatives.
