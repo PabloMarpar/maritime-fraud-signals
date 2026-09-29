@@ -2098,3 +2098,59 @@ labels stays as small as the static models it must beat.
   their static versions), all three vs R2; `emb_logistic` (embedding only) vs R2, descriptive.
   Encoder seed 0 is primary; seeds 1 and 2 are retrained and reported for stability only.
 - **Expected: probably null.** A null is reported as the result, not tuned away.
+
+_2026-09-29_ (P4-3j result: our own vessel encoder -- it learns real structure, and adds nothing
+to the sanctions prediction. A null, reported as the result.)
+
+- **Built as pre-registered** (28a6abe; code b11c90a, 5f5b569, f8bb3f8, edf94fe). Tokens:
+  8,672,945 hourly track tokens over 11 windows (~14 s per window) plus event tokens. A NULL bug
+  was caught on the real June window before any use: DuckDB's `least()` skips NULLs, so a missing
+  draught had become 30 m and a missing SOG 40 kn; all clamps now go through `_clip()`, with a
+  regression test. Encoder: 147,054 parameters; pretraining on 19,418 vessel-months / 8,429 IMOs
+  (2024-04..07); ~15-26 s per epoch on the RTX 5060 Ti; early stopping at epochs 30-34 (best held-out
+  total 4.74-4.79 from 6.28-6.40; contrastive 1.83-1.90 against ~4.85 for chance).
+- **Label-free diagnostics (`model/encoder_diagnostics.py`, all three seeds):** no collapse
+  (effective rank 8.2-9.1 of 16); ship type, never an input, is linearly recoverable (tanker AUC
+  0.81-0.83, passenger 0.91-0.93), equally in June (in the pretraining period) and November (not);
+  same-IMO retrieval between two unseen months (2024-08 -> 09, 3,804 vessels): top-1 0.18-0.19,
+  top-10 0.40-0.42, median rank 18-21 against ~1,902 for chance. The encoder works.
+- **Against the label (primary pool 2024-08..2025-02, R2's budget, ceiling 0.216; each comparison
+  now has its own fixed bootstrap stream, f8bb3f8):**
+  - **Primary, pre-registered: enc_logistic vs static_logistic: -0.005 [-0.010, -0.001] (seed 0),
+    -0.004 [-0.008, +0.001] (seed 1), -0.005 [-0.010, -0.000] (seed 2).** Borderline negative:
+    adding the embedding to the linear model does not help and may slightly hurt.
+  - enc_lightgbm vs static_lightgbm: -0.002 / -0.000 / -0.001, all n.s.; enc_tabicl vs tabicl
+    (seed 0 only): +0.004 [-0.001, +0.008], n.s. enc_tabicl's 0.202 is the highest pooled figure
+    of any model, but it is not distinguishable from tabicl's 0.198.
+  - Every enc_* model still beats R2 where its static twin does; the embedding alone
+    (`emb_logistic`, descriptive) loses to R2 at the matched budget (0.165-0.172 vs 0.180) and
+    beats it at small budgets (k=50: 0.24-0.30 vs 0.178), far below the static models (0.57-0.71).
+  - **k=200, exploratory only:** enc_logistic vs static_logistic +0.016 n.s. / +0.024 / +0.041
+    (seeds 0/1/2), while enc_lightgbm vs static_lightgbm is +0.001 / +0.004 / +0.004. A secondary
+    budget, 2 significant of 36 encoder comparisons (and 2 significantly negative), not replicated
+    for the nonlinear head, and still below static_lightgbm (0.366-0.391 vs 0.413): best read as
+    the embedding giving the linear head nonlinear information the static columns already hold.
+- **Verdict (worded per `analyst-review`):** a month-invariant track fingerprint, learned without
+  labels from Danish AIS, adds nothing to static columns plus a nonlinear head. This does NOT show
+  that tracks carry no signal: the contrastive objective by design rewards what stays constant for
+  a vessel across months, which overlaps with its static identity, and the behaviours that would
+  matter are rare here (the 141/139 test positives of July/November have 0 sts events between
+  them). Consistent with P4-0 (detectors) and the research report's expectation.
+- **`analyst-review`: no blocker, no leak.** Verified: every token reads only its window's
+  partitions; pretraining never reads past 2024-07-31 (window guard, standardizer, next-month
+  targets, draught scale); `region_id` never enters `collate`; the pretraining population is
+  label-free (imo IS NOT NULL, incl. already-sanctioned vessels); 0 missing/NaN embeddings over
+  52,337 rows x 3 seeds; stored GPU embeddings match a fresh CPU run to 2e-4. In-sample embeddings
+  for training rows from 2024-04..07 are not a material handicap (a classifier separating July
+  from August embeddings reaches AUC 0.56-0.59, the same as between two in-period months; the
+  tanker probe transfers within 0.003). Acted on: per-comparison bootstrap streams (the seed
+  runs with/without TabICL had drawn different resamples), `emb_logistic` verdicts flagged
+  descriptive, the narrower verdict wording above, k=200 read as exploratory. Noted, not changed:
+  24-27% of tokens sit at land distance 0 and 7-18% at the 50 km cap (0.05-degree grid; positions
+  outside its box silently get 50 km); the anchor view carrying the reconstruction mask also feeds
+  the contrastive/next-month losses (standard, not in the design text); the LayerNorm output has a
+  near-constant norm (~4.42, one degree of freedom).
+- **Not done, on purpose:** no retuning of the encoder after seeing these results -- any change
+  now would be selected on the test months. A behaviour-focused objective (month-specific rather
+  than month-invariant) or re-testing the embedding inside P4-3g's hazard design (many more
+  positives) would each need a fresh pre-registration.

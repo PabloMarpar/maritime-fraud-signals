@@ -404,10 +404,19 @@ Unexplained process deaths during the build (2026-09-28) were never explained.
      Use `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
      local relay (`python -m ingest.aisstream`, or `npx wrangler dev --port 8765` in `relay/`).
      A plain build targets the public relay.
-6. **P4-3j, our own vessel encoder** (author's request, design pre-registered 2026-09-29): track
-   transformer without coordinates + detector-event transformer + static MLP, self-supervised on
-   2024-04..2024-07 only, logistic head vs the static logistic. Expected null.
+6. **DONE 2026-09-29: P4-3j, our own vessel encoder -- a null.** `features/vessel_tokens.py`
+   (hourly track tokens without position/COG/identity + event tokens, `data/processed/tokens/`),
+   `model/vessel_encoder.py` (147k-parameter transformer, self-supervised on 2024-04..07 only,
+   embeddings in `data/processed/embeddings/seed={0,1,2}/`), `model/encoder_diagnostics.py`, and
+   enc_* heads in `model/walk_forward.py`. The encoder learns real structure (ship type AUC ~0.82
+   without being told it, same-vessel retrieval on unseen months top-1 ~0.19) but adds nothing to
+   the static models: enc_logistic vs static_logistic ~-0.005 at R2's budget in all 3 seeds,
+   LightGBM/TabICL +-0.004 n.s. `analyst-review`: no leak, no handicap. Do not retune it on these
+   results; a new objective or re-testing inside P4-3g needs a fresh pre-registration.
    Then P4-4 (calibration) and bagging PU as a remaining cheap challenger.
+   **README not yet updated** with the walk-forward, TabICLv2 and P4-3j results and their
+   limitations (vessel-level snooping of the destination regexes, OFAC+UK-only labels) --
+   `CLAUDE.md` requires it.
 7. Remaining signal ideas are task P4-3d: pilotage refusal, Skagen anchoring, GFW port visits.
    Flag/name changes mostly happen AFTER designation (CREA), so they leak unless restricted to
    well before the cutoff. Owner/manager networks are out (P4-3f NO-GO).
