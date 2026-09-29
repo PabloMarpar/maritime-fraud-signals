@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -357,6 +358,16 @@ def encoder_scores(windows: Sequence[Window], test: Window, use_tabicl: bool) ->
     return out
 
 
+def _comparison_rng(seed: int, a: str, b: str, budget: object, scope: str = "") -> np.random.Generator:
+    """One fixed bootstrap stream per comparison, so a comparison's interval does not depend on
+    which other comparisons ran before it in the same report (analyst-review, 2026-09-29: runs
+    with and without TabICL drew different resamples for the same enc_* comparison)."""
+    return np.random.default_rng([seed, zlib.crc32(f"{a}|{b}|{budget}|{scope}".encode())])
+
+
+DESCRIPTIVE_ONLY = frozenset({"emb_logistic", "rule_tanker_dest"})
+
+
 def _fmt(v: float | None, spec: str = ".3f") -> str:
     return "  n/a" if v is None or (isinstance(v, float) and np.isnan(v)) else format(v, spec)
 
@@ -409,12 +420,14 @@ def _report(
             if all(m in c.scores for c in cutoffs_primary):
                 lines.append(f"    {m:30s} {_fmt(pooled_precision(cutoffs_primary, m, budget))}")
         lines.append("  pooled difference, paired IMO-clustered bootstrap 95% CI:")
-        rng = np.random.default_rng(seed)
         for a, b in comparisons:
             if not all(a in c.scores and b in c.scores for c in cutoffs_primary):
                 continue
+            rng = _comparison_rng(seed, a, b, budget)
             pt, lo, hi = cluster_bootstrap_pooled_diff(cutoffs_primary, a, b, budget, n_bootstrap, rng)
             verdict = "WINS" if lo > 0 else ("LOSES" if hi < 0 else "no significant difference")
+            if a in DESCRIPTIVE_ONLY:
+                verdict += " (descriptive only)"
             lines.append(
                 f"    {a} - {b}: {_fmt(pt, '+.3f')} [{_fmt(lo, '+.3f')}, {_fmt(hi, '+.3f')}]"
                 f"  -> {verdict}"
@@ -427,11 +440,11 @@ def _report(
         (f"without {EXAMINED_CUTOFF} (examined before)", no_nov),
     ):
         lines.append(f"  {title}:")
-        rng = np.random.default_rng(seed)
         for a, b in comparisons:
             if not all(a in c.scores and b in c.scores for c in cs):
                 continue
             pa, pb = pooled_precision(cs, a, "r2"), pooled_precision(cs, b, "r2")
+            rng = _comparison_rng(seed, a, b, "r2", title)
             pt, lo, hi = cluster_bootstrap_pooled_diff(cs, a, b, "r2", n_bootstrap, rng)
             lines.append(
                 f"    {a} {_fmt(pa)} vs {b} {_fmt(pb)}: {_fmt(pt, '+.3f')} "

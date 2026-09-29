@@ -231,3 +231,12 @@ def test_detector_variants_never_see_the_embedding():
     w = _window_with_embeddings(date(2024, 8, 1), date(2024, 8, 31), [None] * 3)
     for variant in ("detectors", "detectors_context", "detectors_context_noexp"):
         assert not set(EMB_COLUMNS) & set(detector_columns([w], variant))
+
+
+def test_a_comparisons_bootstrap_does_not_depend_on_the_others():
+    from model.walk_forward import _comparison_rng
+
+    first = _comparison_rng(0, "enc_logistic", "static_logistic", "r2").integers(0, 10**9, 5)
+    again = _comparison_rng(0, "enc_logistic", "static_logistic", "r2").integers(0, 10**9, 5)
+    other = _comparison_rng(0, "enc_lightgbm", "static_lightgbm", "r2").integers(0, 10**9, 5)
+    assert first.tolist() == again.tolist() and first.tolist() != other.tolist()
