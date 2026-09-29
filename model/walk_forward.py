@@ -700,9 +700,12 @@ def run_walk_forward(
     # P4-13, pre-registered: each model-side variant against the current best static model.
     comparisons += [(m, "static_lightgbm") for m in P4_13_MODELS if m in models]
     # P4-11/P4-3h/P4-12: each feature set against the current bar and within its own recipe.
-    for n in feature_sets or {}:
+    sets = list(feature_sets or {})
+    for i, n in enumerate(sets):
         comparisons += [(f"{n}_pu_lightgbm", "static_pu_lightgbm"),
                         (f"{n}_lightgbm", "static_lightgbm")]
+        # A later set against each earlier one (e.g. ports+hist vs ports, the current bar).
+        comparisons += [(f"{n}_pu_lightgbm", f"{m}_pu_lightgbm") for m in sets[:i]]
     # P4-3j, pre-registered: does the embedding add anything to each static recipe?
     for enc, base in (("enc_logistic", "static_logistic"), ("enc_lightgbm", "static_lightgbm"),
                       ("enc_tabicl", "tabicl")):
