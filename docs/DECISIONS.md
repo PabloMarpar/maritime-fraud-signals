@@ -2316,3 +2316,31 @@ Per row (vessel IMO x window W), using only information dated strictly before W'
   GFW `registryInfo` (ownership/registry data is compiled with later knowledge).
 - **Variants:** `hist_lightgbm`, `hist_tabicl` = the static recipes on STATIC_COLUMNS + the P4-11
   port columns (if P4-11 is adopted) + these columns. Decision per amended rule 3.
+
+_2026-09-29_ (P4-3h: implied eastern-Baltic loading from draught -- pre-registered before any
+crossing is computed)
+
+- **Gate line.** Meridian 14.0 E between 54.3 N and 56.0 N (Arkona basin, east of the Sound and
+  the Fehmarn Belt, west of Bornholm): traffic to and from the eastern Baltic crosses it inside
+  Danish coverage. A crossing = two consecutive positions of one IMO (any of its mmsi) on
+  opposite sides of 14.0 E, both inside the latitude band, at most 2 h apart. Tankers only
+  (`ship_type = 'Tanker'` in that window's roster), valid IMO.
+- **Round trip.** An eastbound crossing followed by that IMO's next westbound crossing, 2 to 30
+  days later. Crossing draught = median reported draught in the +-12 h around the crossing (NaN if
+  none; such trips are not counted). Relative change = (west - east) / the vessel's max draught
+  seen before the westbound crossing.
+- **Thresholds are fixed on March 2024 only** (clean days 2024-03-02..03-31, which precede every
+  window's rows): the laden-return cut is the lowest point of a smoothed histogram of relative
+  change between its two main modes; if no bimodality is visible, a fixed 0.20 (20% of max
+  draught) is used. The chosen value is recorded here before any window's feature is built.
+- **Validation gate (label-free), before any model uses it.** Over up to 100 laden-return trips
+  (all months, 2024-04..2025-02), the share with a GFW port visit (P4-11, confidence >= 3)
+  between the two crossings at a RUS anchorage. >= 80% -> continue; < 80% -> the feature is
+  reported as "eastern-Baltic loading, not specifically Russian" and still tested, with that
+  name. The share is recorded here either way.
+- **Features** (per row = vessel x window W; trips whose westbound crossing is in
+  [max(2024-03-02, window_end - 270 d), window_end)): `lr_n_trips`, `lr_n_laden_returns`,
+  `lr_laden_share` (NaN when no trips), `lr_rate_per_30d` = laden returns per 30 observable days
+  (the lookback length varies for early windows). knowable_at = the westbound crossing time.
+- **Variants:** `draught_lightgbm` = static recipe on STATIC_COLUMNS + the adopted P4-11/P4-12
+  columns + these. Decision per amended rule 3.
