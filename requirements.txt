@@ -9,6 +9,10 @@ scikit-learn>=1.5
 scipy>=1.11
 lightgbm>=4.5
 shap>=0.46
+# TabICLv2 challenger (P4-3i), pinned by the pre-registration. torch needs the CUDA 12.8 wheels
+# for the RTX 5060 Ti (sm_120): pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch>=2.7
+tabicl==2.2.0
 
 # Geospatial
 shapely>=2.0
