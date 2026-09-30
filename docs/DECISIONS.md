@@ -2543,3 +2543,26 @@ specified here before they are run)
   finalists are re-named after the rerun.
 - **Noted, not changed:** port-visit features use `end < window_end` (the inclusive last day of
   the window), dropping that day's visits -- conservative, not a leak.
+
+_2026-09-30_ (review fixes applied; contamination gate committed)
+
+- **Fixes landed** as specified the day before: `features/history.py` never reads
+  `transmissionDateTo` (regression test fails on the old code; structural guard);
+  `ingest/gfw_port_visits.py` stores `sri_imo`/`match_basis`/`use_for_features`, features use only
+  identities whose own self-reported IMO equals the queried one (24,372 kept, 843 registry-only
+  dropped; placeholders 1234567/5555555 no longer queried; 0 shared ids among kept rows); port
+  visits filtered to kept ids (1,833,517 -> 1,831,236 events, no re-fetch). Row counts unchanged.
+  History columns moved on ~400-1,200 of 175,877 rows each (e.g. `hist_n_flags_730d` mean 1.161
+  -> 1.146).
+- **`model/gfw_gate.py` (`outputs/gfw_gate.txt`)**, non-sealed IMOs, 321 positive / 5,827
+  negative. (a) Coverage: resolved 1.000 vs 0.999, any visit 0.984 vs 0.986 -> **GO**. (b)
+  Richness, all FLAGGED: identities per IMO (whole history, incl. post-designation) median 6 vs 2,
+  AUC 0.93; `hist_n_mmsi_730d` AUC 0.81; `pv_n_total` median 21 vs 34, AUC 0.27. (c) Registry-only
+  identities dropped: 0.8% of positive vs 3.9% of negative identity rows.
+- **Reading of the flags.** The whole-history identity count is inflated by post-designation
+  reflagging and renaming (CREA) and is NOT a feature; features only use identities started
+  before window_end. Kept identities are AIS self-reports (MMSI/name/flag as broadcast, with the
+  vessel's own IMO), not registry curation, so `hist_n_mmsi_730d` measures pre-cutoff identity
+  churn -- a behaviour, the kind of signal sought -- rather than GFW researching notorious
+  vessels. Fewer recorded port visits for positives fits going dark in port. All three go in the
+  README's limitations as flagged, not hidden.

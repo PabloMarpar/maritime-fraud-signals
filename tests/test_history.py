@@ -96,9 +96,9 @@ def test_segment_starting_after_window_end_is_ignored():
     assert r["hist_to_foc_730d"] is False
 
 
-def test_segment_straddling_window_end_is_clipped_not_excluded():
-    """transmissionDateTo far beyond window_end (still an open/active segment) must still count,
-    clipped at window_end -- never excluded, never read past the cutoff."""
+def test_segment_straddling_window_end_still_counts():
+    """A segment that started before window_end counts whatever its transmissionDateTo is (the
+    column is not read at all)."""
     rows = _run_gfw(
         panel_rows=[(1, "9111111")],
         vessel_ids_rows=[
@@ -170,6 +170,64 @@ def test_n_names_and_n_mmsi_count_distinct_within_730d():
     assert r["hist_n_names_730d"] == 2
     assert r["hist_n_mmsi_730d"] == 2
     assert r["hist_n_flags_730d"] == 1  # flag never changed
+
+
+def test_regression_identity_used_again_after_cutoff_is_not_active_in_range():
+    """The BLOCKER: identity A (DNK) started long before the range and was last used AFTER
+    window_end. The old clipped-`to` rule counted it as active inside the range. B (PAN) is the
+    latest-started identity before the range, and C (PAN) starts inside it, so the range holds
+    only PAN -- 1 flag. Old code returned 2 (DNK + PAN)."""
+    rows = _run_gfw(
+        panel_rows=[(1, "9111111")],
+        vessel_ids_rows=[
+            ("9111111", "vid-a", "111", "MV A", "DNK", _dt(2018, 1, 1), _dt(2025, 6, 1)),
+            ("9111111", "vid-b", "222", "MV B", "PAN", _dt(2021, 1, 1), _dt(2021, 6, 1)),
+            ("9111111", "vid-c", "333", "MV C", "PAN", _dt(2023, 6, 1), None),
+        ],
+    )
+    r = rows[1]
+    assert r["hist_n_flags_730d"] == 1
+    assert r["hist_n_names_730d"] == 2  # B (latest before the range) and C
+    assert r["hist_n_mmsi_730d"] == 2
+
+
+def test_latest_started_before_range_is_active_in_range_even_if_it_ended_long_ago():
+    rows = _run_gfw(
+        panel_rows=[(1, "9111111")],
+        vessel_ids_rows=[
+            ("9111111", "vid-a", "111", "MV A", "DNK", _dt(2015, 1, 1), _dt(2016, 1, 1)),
+            ("9111111", "vid-b", "222", "MV B", "PAN", _dt(2020, 1, 1), _dt(2020, 2, 1)),
+        ],
+    )
+    r = rows[1]
+    assert r["hist_n_flags_730d"] == 1  # only B, the latest one started before the range
+    assert r["hist_n_mmsi_730d"] == 1
+
+
+def test_transmission_date_to_has_no_influence_on_any_gfw_column():
+    def run(to_a, to_b):
+        return _run_gfw(
+            panel_rows=[(1, "9111111")],
+            vessel_ids_rows=[
+                ("9111111", "vid-a", "111", "MV A", "DNK", _dt(2018, 1, 1), to_a),
+                ("9111111", "vid-b", "222", "MV B", "PAN", _dt(2023, 1, 1), to_b),
+            ],
+        )[1]
+
+    baseline = run(None, None)
+    assert run(_dt(2019, 1, 1), _dt(2023, 2, 1)) == baseline
+    assert run(_dt(2030, 1, 1), _dt(2030, 1, 1)) == baseline
+
+
+def test_feature_computation_never_references_transmission_date_to():
+    import inspect
+
+    sql = h.gfw_derived_features_sql(
+        "SELECT 1 AS mmsi, 'x' AS imo", "SELECT * FROM vids", WINDOW_END
+    ).lower()
+    assert "transmission_date_to" not in sql
+    assert "transmissiondateto" not in sql
+    assert "transmission_date_to" not in inspect.getsource(h.build_history_features).lower()
 
 
 # --------------------------------------------------------------------------------------------
@@ -426,9 +484,12 @@ def _write_vessel_ids(path: Path, rows: list[tuple]) -> None:
         con.execute(
             "CREATE TABLE t (imo VARCHAR, gfw_vessel_id VARCHAR, ssvid VARCHAR, "
             "shipname VARCHAR, flag VARCHAR, transmission_date_from TIMESTAMP, "
-            "transmission_date_to TIMESTAMP)"
+            "transmission_date_to TIMESTAMP, use_for_features BOOLEAN)"
         )
-        con.executemany("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+        con.executemany(
+            "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [r if len(r) == 8 else (*r, True) for r in rows],
+        )
         con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
@@ -527,6 +588,28 @@ def test_missing_static_partition_for_a_prior_window_is_tolerated(tmp_path):
     r = _read(out_path)[1]
     assert r["hist_prior_windows_seen"] == pytest.approx(1.0)
     assert r["hist_prior_dest_russia"] is False
+
+
+def test_build_history_features_ignores_identities_not_marked_for_features(tmp_path):
+    panel_root = tmp_path / "panel"
+    panel_dir = panel_root / "window=2024-08-01_2024-08-31"
+    _write_panel(panel_dir / "part-0.parquet", [(1, "9111111"), (2, "9222222")])
+    vessel_ids_path = tmp_path / "vessel_ids.parquet"
+    _write_vessel_ids(
+        vessel_ids_path,
+        [
+            ("9111111", "vid-1", "111", "MV ONE", "PAN", _dt(2020, 1, 1), None, False),
+            ("9222222", "vid-2", "222", "MV TWO", "PAN", _dt(2020, 1, 1), None, True),
+        ],
+    )
+    out_path = h.build_history_features(
+        WINDOW_START, WINDOW_END, panel_dir,
+        panel_root=panel_root, static_root=tmp_path / "static", vessel_ids_path=vessel_ids_path,
+        out_root=tmp_path / "out",
+    )
+    rows = _read(out_path)
+    assert rows[1]["hist_n_flags_730d"] is None  # registry-only / shared -> unresolved
+    assert rows[2]["hist_n_flags_730d"] == 1
 
 
 def test_build_history_features_writes_parquet_and_is_idempotent(tmp_path):

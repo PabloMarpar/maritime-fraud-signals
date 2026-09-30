@@ -398,12 +398,13 @@ def _write_panel(path: Path, rows: list[tuple[int, str | None]]) -> None:
         con.close()
 
 
-def _write_vessel_ids(path: Path, rows: list[tuple[str, str]]) -> None:
+def _write_vessel_ids(path: Path, rows: list[tuple]) -> None:
+    """rows: (imo, gfw_vessel_id) or (imo, gfw_vessel_id, use_for_features)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     try:
-        con.execute("CREATE TABLE t (imo VARCHAR, gfw_vessel_id VARCHAR)")
-        con.executemany("INSERT INTO t VALUES (?, ?)", rows)
+        con.execute("CREATE TABLE t (imo VARCHAR, gfw_vessel_id VARCHAR, use_for_features BOOLEAN)")
+        con.executemany("INSERT INTO t VALUES (?, ?, ?)", [(*r, True) if len(r) == 2 else r for r in rows])
         con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
@@ -464,6 +465,25 @@ def test_build_port_visits_features_writes_parquet_and_is_idempotent(tmp_path):
         out_root=tmp_path / "out",
     )
     assert out_path.stat().st_mtime_ns == mtime_before  # re-run without force is a no-op
+
+
+def test_build_port_visits_features_ignores_identities_not_marked_for_features(tmp_path):
+    """A registry-only / shared identity (use_for_features false) must leave the imo unresolved."""
+    panel_dir = tmp_path / "panel" / "window=2024-08-01_2024-08-31"
+    _write_panel(panel_dir / "part-0.parquet", [(1, "9111111"), (2, "9222222")])
+    vessel_ids_path = tmp_path / "vessel_ids.parquet"
+    _write_vessel_ids(vessel_ids_path, [("9111111", "vid-1", False), ("9222222", "vid-2")])
+    port_visits_path = tmp_path / "port_visits.parquet"
+    _write_port_visits(port_visits_path, [("9222222", _ts(2024, 8, 20), 4, "RUS", "PRIMORSK")])
+
+    out_path = pv.build_port_visits_features(
+        WINDOW_START, WINDOW_END, panel_dir,
+        vessel_ids_path=vessel_ids_path, port_visits_path=port_visits_path,
+        out_root=tmp_path / "out",
+    )
+    rows = _read(out_path)
+    assert rows[1]["gfw_resolved"] == 0
+    assert rows[2]["gfw_resolved"] == 1
 
 
 def test_build_port_visits_features_tolerates_missing_reference_files(tmp_path):

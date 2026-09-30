@@ -40,6 +40,13 @@ A rerun skips any IMO whose cache file already exists; :func:`build_gfw_port_vis
 aggregates the two final tables from whatever is cached, so a partial run (killed, rate-limited,
 whatever) is always safe to resume and cheap to finish.
 
+**Identity matching rule (analyst-review fix, ``docs/DECISIONS.md`` 2026-09-29).** A record with
+no self-reported IMO that was matched only through the entry's ``registryInfo`` is stored with
+``match_basis='registry_only'`` for auditing but never used: registry data is compiled with later
+knowledge. ``vessel_ids.parquet`` carries ``use_for_features`` (own self-reported IMO equals the
+queried imo, not a placeholder IMO, id not claimed by more than one imo); features read only those
+rows, and ``port_visits.parquet`` holds only their events.
+
 **Ownership fields excluded by design.** ``registryInfo``/``registryOwners`` (ownership,
 tonnage, gear type) are never stored here -- P4-3f already found the ownership-network data source
 unusable for this archive period (no link predates any cutoff); only the self-reported identity
@@ -122,7 +129,20 @@ VESSEL_IDS_SCHEMA: list[tuple[str, str]] = [
     ("callsign", "VARCHAR"),
     ("transmission_date_from", "TIMESTAMP"),
     ("transmission_date_to", "TIMESTAMP"),
+    # The record's OWN self-reported IMO (null when it has none) and how it matched the queried
+    # IMO: 'self_reported_imo' (own IMO equals it) or 'registry_only' (no own IMO; matched only
+    # through the entry's registryInfo, which is compiled with later knowledge). Only the former
+    # is ever used by the features -- see ``use_for_features`` in
+    # _aggregate_vessel_ids.
+    ("sri_imo", "VARCHAR"),
+    ("match_basis", "VARCHAR"),
 ]
+
+MATCH_SELF_REPORTED = "self_reported_imo"
+MATCH_REGISTRY_ONLY = "registry_only"
+
+# Placeholder IMOs seen in the data (many unrelated vessels report them): excluded entirely.
+PLACEHOLDER_IMOS: frozenset[str] = frozenset({"1234567", "5555555"})
 
 PORT_VISITS_SCHEMA: list[tuple[str, str]] = [
     ("imo", "VARCHAR"),
@@ -155,6 +175,8 @@ class SelfReportedIdentity:
     callsign: str | None
     transmission_date_from: datetime | None
     transmission_date_to: datetime | None
+    sri_imo: str | None = None
+    match_basis: str = MATCH_SELF_REPORTED
 
 
 @dataclass(frozen=True)
@@ -201,7 +223,8 @@ def load_api_token(env_path: Path = ENV_PATH, var: str = TOKEN_ENV_VAR) -> str |
 
 
 def distinct_imos(panel_root: Path = PANEL_ROOT) -> list[str]:
-    """Every distinct non-null imo across every panel window, excluding the stray 2-day window."""
+    """Every distinct non-null imo across every panel window, excluding the stray 2-day window and
+    the placeholder IMOs (:data:`PLACEHOLDER_IMOS`)."""
     pattern = (panel_root / "window=*" / "part-0.parquet").as_posix()
     con = duckdb.connect()
     try:
@@ -211,7 +234,7 @@ def distinct_imos(panel_root: Path = PANEL_ROOT) -> list[str]:
         ).fetchall()
     finally:
         con.close()
-    return sorted(r[0] for r in rows)
+    return sorted(r[0] for r in rows if r[0] not in PLACEHOLDER_IMOS)
 
 
 def _parse_gfw_timestamp(value: Any) -> datetime | None:
@@ -286,8 +309,13 @@ def _self_reported_identities(imo: str, payload: dict[str, Any]) -> list[SelfRep
             if not vessel_id:
                 continue
             sri_imo = sri.get("imo")
-            matched = (sri_imo == imo) if sri_imo else (imo in registry_imos)
-            if not matched:
+            if sri_imo:
+                if sri_imo != imo:
+                    continue
+                match_basis = MATCH_SELF_REPORTED
+            elif imo in registry_imos:
+                match_basis = MATCH_REGISTRY_ONLY
+            else:
                 continue
             out.append(
                 SelfReportedIdentity(
@@ -299,6 +327,8 @@ def _self_reported_identities(imo: str, payload: dict[str, Any]) -> list[SelfRep
                     callsign=sri.get("callsign"),
                     transmission_date_from=_parse_gfw_timestamp(sri.get("transmissionDateFrom")),
                     transmission_date_to=_parse_gfw_timestamp(sri.get("transmissionDateTo")),
+                    sri_imo=sri_imo or None,
+                    match_basis=match_basis,
                 )
             )
     return out
@@ -402,7 +432,7 @@ def fetch_port_visits_batch(
 def _rows_for_vessel_ids(identities: list[SelfReportedIdentity]) -> list[tuple]:
     return [
         (i.imo, i.gfw_vessel_id, i.ssvid, i.shipname, i.flag, i.callsign,
-         i.transmission_date_from, i.transmission_date_to)
+         i.transmission_date_from, i.transmission_date_to, i.sri_imo, i.match_basis)
         for i in identities
     ]
 
@@ -599,25 +629,75 @@ def fetch_all_port_visits(
         client.close()
 
 
-def _aggregate_cache(
-    cache_dir: Path, schema: list[tuple[str, str]], out_path: Path, order_by: str
-) -> None:
+def _glob_or_none(cache_dir: Path) -> str | None:
     pattern = (cache_dir / "*.parquet").as_posix()
+    return pattern if glob_module.glob(pattern) else None
+
+
+def _aggregate_vessel_ids(cache_dir: Path, out_path: Path) -> None:
+    """Aggregate the per-imo identity cache into ``vessel_ids.parquet``, adding
+    ``id_shared`` (this gfw_vessel_id is self-reported by more than one distinct imo) and
+    ``use_for_features`` -- the ONLY rows any feature may read: the record's own self-reported IMO
+    equals the queried imo, the imo is not a placeholder, and the id is not shared. Registry-only,
+    placeholder and shared rows stay in the file for auditing."""
+    pattern = _glob_or_none(cache_dir)
     con = duckdb.connect()
     try:
         built_at = datetime.now(timezone.utc)
         sha = git_sha()
-        if not glob_module.glob(pattern):
-            cols_ddl = ", ".join(f'"{name}" {typ}' for name, typ in schema)
-            con.execute(f"CREATE TABLE t ({cols_ddl})")
-            source_sql = "SELECT * FROM t"
+        if pattern is None:
+            cols_ddl = ", ".join(f'"{name}" {typ}' for name, typ in VESSEL_IDS_SCHEMA)
+            con.execute(f"CREATE TABLE ids ({cols_ddl})")
         else:
-            con.execute(f"CREATE OR REPLACE TEMP VIEW t AS SELECT * FROM read_parquet('{pattern}')")
-            source_sql = f"SELECT * FROM t ORDER BY {order_by}"
+            con.execute(f"CREATE TABLE ids AS SELECT * FROM read_parquet('{pattern}')")
+        placeholders = ", ".join(f"'{p}'" for p in sorted(PLACEHOLDER_IMOS))
         atomic_write_parquet(
             con,
-            f"SELECT *, TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
-            f"'{sha}' AS git_sha FROM ({source_sql})",
+            f"""
+            WITH shared AS (
+                SELECT gfw_vessel_id FROM ids
+                WHERE match_basis = '{MATCH_SELF_REPORTED}' AND sri_imo = imo
+                GROUP BY gfw_vessel_id HAVING count(DISTINCT imo) > 1
+            )
+            SELECT ids.*,
+                (ids.gfw_vessel_id IN (SELECT gfw_vessel_id FROM shared)) AS id_shared,
+                (ids.match_basis = '{MATCH_SELF_REPORTED}' AND ids.sri_imo = ids.imo
+                 AND ids.imo NOT IN ({placeholders})
+                 AND ids.gfw_vessel_id NOT IN (SELECT gfw_vessel_id FROM shared)) AS use_for_features,
+                TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at,
+                '{sha}' AS git_sha
+            FROM ids ORDER BY ids.imo, ids.gfw_vessel_id
+            """,
+            out_path,
+        )
+    finally:
+        con.close()
+
+
+def _aggregate_port_visits(cache_dir: Path, vessel_ids_path: Path, out_path: Path) -> None:
+    """Aggregate the per-imo event cache into ``port_visits.parquet``, keeping only events whose
+    (imo, gfw_vessel_id) is a ``use_for_features`` identity in ``vessel_ids_path``. The cache is
+    per imo with the id on every event, so no re-fetch is needed when the identity rule changes."""
+    pattern = _glob_or_none(cache_dir)
+    con = duckdb.connect()
+    try:
+        built_at = datetime.now(timezone.utc)
+        sha = git_sha()
+        if pattern is None:
+            cols_ddl = ", ".join(f'"{name}" {typ}' for name, typ in PORT_VISITS_SCHEMA)
+            con.execute(f"CREATE TABLE ev ({cols_ddl})")
+        else:
+            con.execute(f"CREATE TABLE ev AS SELECT * FROM read_parquet('{pattern}')")
+        con.execute(
+            "CREATE TEMP VIEW kept AS SELECT DISTINCT imo, gfw_vessel_id "
+            f"FROM read_parquet('{vessel_ids_path.as_posix()}') WHERE use_for_features"
+        )
+        atomic_write_parquet(
+            con,
+            "SELECT ev.*, "
+            f"TIMESTAMP '{built_at.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS built_at, "
+            f"'{sha}' AS git_sha "
+            "FROM ev JOIN kept USING (imo, gfw_vessel_id) ORDER BY ev.imo, ev.start",
             out_path,
         )
     finally:
@@ -631,11 +711,14 @@ def build_gfw_port_visits(
     api_token: str | None = None,
     workers: int = DEFAULT_WORKERS,
     force: bool = False,
+    refresh_identities: bool = False,
 ) -> tuple[Path, Path]:
     """Resolve GFW vessel ids and fetch port-visit events for every distinct imo in the panel.
 
     Resumable via the per-imo cache under :data:`CACHE_ROOT` (see module docstring); ``force=True``
-    wipes the cache first and re-fetches everything.
+    wipes the cache first and re-fetches everything. ``refresh_identities=True`` wipes only the
+    identity cache (re-searching every imo) and keeps the per-imo port-visit event cache, which is
+    re-filtered to the kept identities at aggregation time.
     """
     api_token = api_token or load_api_token()
     if not api_token:
@@ -646,6 +729,8 @@ def build_gfw_port_visits(
 
     if force:
         shutil.rmtree(CACHE_ROOT, ignore_errors=True)
+    elif refresh_identities:
+        shutil.rmtree(VESSEL_IDS_CACHE, ignore_errors=True)
 
     imos = distinct_imos(panel_root)
     logger.info("%d distinct imo(s) across the panel", len(imos))
@@ -653,8 +738,8 @@ def build_gfw_port_visits(
     resolve_all_vessel_ids(imos, api_token, workers=workers)
     fetch_all_port_visits(imos, api_token, workers=workers)
 
-    _aggregate_cache(VESSEL_IDS_CACHE, VESSEL_IDS_SCHEMA, vessel_ids_out, order_by="imo, gfw_vessel_id")
-    _aggregate_cache(PORT_VISITS_CACHE, PORT_VISITS_SCHEMA, port_visits_out, order_by="imo, start")
+    _aggregate_vessel_ids(VESSEL_IDS_CACHE, vessel_ids_out)
+    _aggregate_port_visits(PORT_VISITS_CACHE, vessel_ids_out, port_visits_out)
 
     con = duckdb.connect()
     try:
@@ -680,6 +765,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--panel-root", default=str(PANEL_ROOT))
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument(
+        "--refresh-identities", action="store_true",
+        help="Wipe only the identity cache and re-search every imo; keep cached port visits",
+    )
+    parser.add_argument(
         "--force", action="store_true", help="Wipe the per-imo cache and re-fetch everything"
     )
     return parser.parse_args(argv)
@@ -688,7 +777,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parse_args(argv)
-    build_gfw_port_visits(panel_root=Path(args.panel_root), workers=args.workers, force=args.force)
+    build_gfw_port_visits(
+        panel_root=Path(args.panel_root), workers=args.workers, force=args.force,
+        refresh_identities=args.refresh_identities,
+    )
 
 
 if __name__ == "__main__":

@@ -14,7 +14,12 @@ instead.
 plumbing, same window-partitioned output layout). Columns:
 
 - ``hist_n_flags_730d``, ``hist_n_names_730d``, ``hist_n_mmsi_730d`` -- distinct flag / shipname /
-  ssvid among GFW identity segments active at any time in ``[window_end - 730d, window_end)``.
+  ssvid among the GFW identity segments "in the 730-day range": every segment whose
+  ``transmissionDateFrom`` falls in ``[window_end - 730d, window_end)``, **plus** the single latest
+  segment (by ``transmissionDateFrom``) that started before that range opened -- the identity most
+  recently adopted at the moment the range opens, which is still the vessel's identity at that
+  instant even though its own start date is older. **Never reads ``transmissionDateTo``** (see
+  "Segment selection" below).
 - ``hist_flag_age_days`` -- days from the start of the current flag run to ``window_end``, capped
   at 1,825. The current flag run starts at the latest segment (by ``transmissionDateFrom``) whose
   flag differs from the segment immediately before it in that ordering; if the flag never changed,
@@ -45,13 +50,16 @@ counts read 0 (nothing observed, not "unknown" -- consistent with ``features.sta
 is false, but ``hist_flag_age_days``/``hist_ais_age_days`` are NaN (no segment to measure an age
 from at all). An assumption, not explicit in the pre-registration.
 
-**Segment clipping and filtering, exactly as pre-registered.** Only segments with
-``transmissionDateFrom < window_end`` are read at all; a kept segment's effective end is
-``LEAST(transmissionDateTo, window_end)`` (or ``window_end`` itself when ``transmissionDateTo`` is
-null, i.e. "still active") -- a ``transmissionDateTo`` after ``window_end`` is never read.
-"Active at any time in [window_end - 730d, window_end)" is decided against this clipped end, so a
-segment straddling ``window_end`` still counts (clipped, not excluded) and a segment that starts
-only after ``window_end`` is excluded outright by the first filter.
+**Segment selection (P4-12b, the analyst-review BLOCKER fix).** Only segments with
+``transmissionDateFrom < window_end`` are read at all, and ``transmissionDateTo`` is **never read
+by any column**. A GFW self-reported identity is one persistent id whose
+[transmissionDateFrom, transmissionDateTo] spans its first to last use; the first version clipped
+``to`` at ``window_end`` and tested "active in the range", but that still used the fact that
+``to >= window_end``: an identity used before the range and again after the cutoff looked active
+inside the range (772 IMOs affected). Now "in the 730-day range" is decided by start dates alone
+(see the count columns above), so nothing dated after ``window_end`` can influence a value.
+Only identities whose own self-reported IMO equals the vessel's IMO are ever passed in
+(``vessel_ids.parquet``'s ``use_for_features``, :mod:`ingest.gfw_port_visits`).
 
 **Tie-break for overlapping/simultaneous segments.** Every ordering here (the flag run, the
 flag-change detection) sorts by ``transmissionDateFrom`` ascending, then ``gfw_vessel_id``
@@ -209,12 +217,15 @@ def gfw_derived_features_sql(panel_sql: str, vessel_ids_sql: str, window_end: da
     convention of a testable *_sql function) so a test can check it directly against in-memory
     tables."""
     window_end_literal = f"DATE {_sql_literal(window_end.isoformat())}"
+    range_open_literal = f"({window_end_literal} - INTERVAL '{LOOKBACK_DAYS}' DAY)"
     foc_list = _in_list_sql(FOC_ISO3)
     return f"""
     WITH segs AS (
         SELECT imo, gfw_vessel_id, ssvid, shipname, flag, transmission_date_from,
-               CASE WHEN transmission_date_to IS NULL THEN {window_end_literal}
-                    ELSE LEAST(transmission_date_to, {window_end_literal}) END AS clipped_end
+               ROW_NUMBER() OVER (
+                   PARTITION BY imo, (transmission_date_from < {range_open_literal})
+                   ORDER BY transmission_date_from DESC, gfw_vessel_id DESC
+               ) AS rn_side
         FROM ({vessel_ids_sql})
         WHERE transmission_date_from < {window_end_literal}
     ),
@@ -249,7 +260,8 @@ def gfw_derived_features_sql(panel_sql: str, vessel_ids_sql: str, window_end: da
     active_730 AS (
         SELECT imo, flag, shipname, ssvid
         FROM segs
-        WHERE clipped_end > {window_end_literal} - INTERVAL '{LOOKBACK_DAYS}' DAY
+        WHERE transmission_date_from >= {range_open_literal}
+           OR (transmission_date_from < {range_open_literal} AND rn_side = 1)
     ),
     agg730 AS (
         SELECT imo,
@@ -264,7 +276,7 @@ def gfw_derived_features_sql(panel_sql: str, vessel_ids_sql: str, window_end: da
             bool_or(
                 prev_from IS NOT NULL
                 AND NOT is_foc_prev AND is_foc_now
-                AND transmission_date_from >= {window_end_literal} - INTERVAL '{LOOKBACK_DAYS}' DAY
+                AND transmission_date_from >= {range_open_literal}
                 AND transmission_date_from < {window_end_literal}
             ) AS hist_to_foc_730d
         FROM flagged
@@ -405,12 +417,12 @@ def build_history_features(
             con.execute(f"SET threads = {int(threads)}")
         panel_sql = f"SELECT mmsi, imo FROM read_parquet('{panel_path.as_posix()}')"
         vessel_ids_sql = (
-            f"SELECT * FROM read_parquet('{vessel_ids_path.as_posix()}')"
+            "SELECT imo, gfw_vessel_id, ssvid, shipname, flag, transmission_date_from "
+            f"FROM read_parquet('{vessel_ids_path.as_posix()}') WHERE use_for_features"
             if vessel_ids_path.exists()
             else "SELECT NULL::VARCHAR AS imo, NULL::VARCHAR AS gfw_vessel_id, "
             "NULL::VARCHAR AS ssvid, NULL::VARCHAR AS shipname, NULL::VARCHAR AS flag, "
-            "NULL::TIMESTAMP AS transmission_date_from, NULL::TIMESTAMP AS transmission_date_to "
-            "WHERE false"
+            "NULL::TIMESTAMP AS transmission_date_from WHERE false"
         )
         con.execute(
             "CREATE OR REPLACE TEMP TABLE _gfw AS "

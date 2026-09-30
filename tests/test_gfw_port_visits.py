@@ -179,14 +179,23 @@ def test_self_reported_identities_drops_entry_with_different_imo():
     assert [r.gfw_vessel_id for r in result] == ["vid-1"]
 
 
-def test_self_reported_identities_keeps_entry_matched_via_registry_imo():
-    """A selfReportedInfo record with no own imo field is kept if the entry's registryInfo imo
-    matches -- the 'or that the API matched on imo' clause in the task spec."""
+def test_self_reported_identities_marks_own_imo_match_basis():
+    payload = {"entries": [_search_entry("9195717", "vid-1")]}
+    (r,) = gpv._self_reported_identities("9195717", payload)
+    assert r.match_basis == gpv.MATCH_SELF_REPORTED
+    assert r.sri_imo == "9195717"
+
+
+def test_self_reported_identities_keeps_registry_matched_entry_but_marks_it_registry_only():
+    """A record with no own imo matched through registryInfo is stored for auditing, flagged so
+    the features never use it."""
     payload = {
         "entries": [_search_entry("9195717", "vid-1", sri_imo=None, registry_imo="9195717")]
     }
-    result = gpv._self_reported_identities("9195717", payload)
-    assert [r.gfw_vessel_id for r in result] == ["vid-1"]
+    (r,) = gpv._self_reported_identities("9195717", payload)
+    assert r.gfw_vessel_id == "vid-1"
+    assert r.match_basis == gpv.MATCH_REGISTRY_ONLY
+    assert r.sri_imo is None
 
 
 def test_self_reported_identities_drops_entry_matched_via_wrong_registry_imo():
@@ -416,6 +425,60 @@ def test_distinct_imos_excludes_null_and_stray_window(tmp_path):
     assert "9999999" not in result
 
 
+def test_distinct_imos_excludes_placeholder_imos(tmp_path):
+    _make_panel(tmp_path, "2024-06-01_2024-06-30", ["1111111", "1234567", "5555555", "9195717"])
+    assert gpv.distinct_imos(panel_root=tmp_path / "panel") == ["1111111", "9195717"]
+
+
+def _ident_row(imo, vid, basis="self_reported_imo", sri_imo="same"):
+    return (imo, vid, "111", "SHIP", "PAN", None, None, None, imo if sri_imo == "same" else sri_imo, basis)
+
+
+def test_aggregate_flags_use_for_features_and_filters_events(tmp_path):
+    cache = tmp_path / "ids"
+    events_cache = tmp_path / "ev"
+    gpv._write_rows_parquet(
+        [
+            _ident_row("9111111", "ok"),
+            _ident_row("9111111", "reg", basis="registry_only", sri_imo=None),
+            _ident_row("9111111", "dup"),
+            _ident_row("9222222", "dup"),  # same id claimed by two imos -> neither
+            _ident_row("1234567", "ph"),  # placeholder
+            _ident_row("9333333", "onlyreg", basis="registry_only", sri_imo=None),
+        ],
+        gpv.VESSEL_IDS_SCHEMA, cache / "all.parquet",
+    )
+    ev = [
+        (imo, vid, f"e-{vid}-{imo}", None, datetime(2024, 1, 1), datetime(2024, 1, 2), 4, 1.0,  # noqa: DTZ001
+         None, None, None, None, None, None, None, None, None)
+        for imo, vid in [("9111111", "ok"), ("9111111", "reg"), ("9111111", "dup"),
+                         ("9222222", "dup"), ("1234567", "ph")]
+    ]
+    gpv._write_rows_parquet(ev, gpv.PORT_VISITS_SCHEMA, events_cache / "all.parquet")
+
+    ids_out, pv_out = tmp_path / "vessel_ids.parquet", tmp_path / "port_visits.parquet"
+    gpv._aggregate_vessel_ids(cache, ids_out)
+    gpv._aggregate_port_visits(events_cache, ids_out, pv_out)
+
+    con = duckdb.connect()
+    try:
+        flags = dict(con.execute(
+            f"SELECT imo || '/' || gfw_vessel_id, use_for_features FROM '{ids_out.as_posix()}'"
+        ).fetchall())
+        shared = con.execute(
+            f"SELECT count(*) FROM '{ids_out.as_posix()}' WHERE id_shared"
+        ).fetchone()[0]
+        kept_events = con.execute(f"SELECT imo, gfw_vessel_id FROM '{pv_out.as_posix()}'").fetchall()
+    finally:
+        con.close()
+    assert flags == {
+        "9111111/ok": True, "9111111/reg": False, "9111111/dup": False, "9222222/dup": False,
+        "1234567/ph": False, "9333333/onlyreg": False,
+    }
+    assert shared == 2
+    assert kept_events == [("9111111", "ok")]
+
+
 def test_resolve_all_vessel_ids_writes_one_cache_file_per_imo(tmp_path, monkeypatch):
     monkeypatch.setattr(gpv, "VESSEL_IDS_CACHE", tmp_path / "vessel_ids")
     payload = {"entries": [_search_entry("1111111", "vid-a")]}
@@ -477,7 +540,7 @@ def test_fetch_all_port_visits_fetches_and_maps_events_back_to_imo(tmp_path, mon
     monkeypatch.setattr(gpv, "VESSEL_IDS_CACHE", vessel_ids_cache)
     monkeypatch.setattr(gpv, "PORT_VISITS_CACHE", port_visits_cache)
     gpv._write_rows_parquet(
-        [("1111111", "vid-1", None, None, None, None, None, None)],
+        [("1111111", "vid-1", None, None, None, None, None, None, "1111111", "self_reported_imo")],
         gpv.VESSEL_IDS_SCHEMA,
         vessel_ids_cache / "1111111.parquet",
     )

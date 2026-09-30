@@ -248,7 +248,8 @@ def build_port_visits_features(
             con.execute(f"SET threads = {int(threads)}")
         panel_sql = f"SELECT mmsi, imo FROM read_parquet('{panel_path.as_posix()}')"
         vessel_ids_sql = (
-            f"SELECT imo, gfw_vessel_id FROM read_parquet('{vessel_ids_path.as_posix()}')"
+            f"SELECT imo, gfw_vessel_id FROM read_parquet('{vessel_ids_path.as_posix()}') "
+            "WHERE use_for_features"
             if vessel_ids_path.exists()
             else "SELECT NULL::VARCHAR AS imo, NULL::VARCHAR AS gfw_vessel_id WHERE false"
         )
