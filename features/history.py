@@ -283,7 +283,9 @@ def gfw_derived_features_sql(panel_sql: str, vessel_ids_sql: str, window_end: da
         GROUP BY imo
     ),
     resolved AS (
+        -- Resolved as of window_end: an identity that starts later says nothing yet.
         SELECT DISTINCT imo FROM ({vessel_ids_sql})
+        WHERE transmission_date_from < {window_end_literal}
     )
     SELECT
         p.mmsi,

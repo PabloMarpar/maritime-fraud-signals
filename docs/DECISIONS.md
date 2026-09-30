@@ -2591,3 +2591,31 @@ _2026-09-30_ (dev_clean rerun on the fixed GFW data; the chain re-decided; final
   same with `--labels v1`. Primary comparisons, P0 rule, IMO-clustered: each finalist vs R2, vs
   `static_lightgbm` and vs `static_pu_lightgbm`; `ports_hist_ens` vs `ports_ens`. Plus a line
   restricted to positives that exist only under v2.
+
+_2026-09-30_ (second `analyst-review`: no blocker; last fixes; the sealed run fully specified)
+
+- **Review verdict:** no leak; seal intact; finalists consistent with rule 4 as amended. Two
+  items required before unsealing, both done:
+  1. `resolved` in `features/history.py` and `features/port_visits.py` now counts only
+     identities with `transmission_date_from < window_end` (an IMO whose only identity starts later
+     is unresolved as of that window: `gfw_resolved` 0, NULL features). 2 dev rows affected, 0
+     sealed. Both groups rebuilt; dev_clean not rerun for 2 negative rows.
+  2. `model.walk_forward --models` keeps only named models (nothing else is written or reported)
+     and `--compare A:B` adds named comparisons.
+- **Disclosures the review asked for:** the -0.001 that kept `hist` out is a single cutoff
+  (2024-12); the R2-budget clause is saturated (~0.085 against a ceiling of 0.088); the chain is
+  order-dependent (`ports_hist_ens` 0.340 vs `ports_ens` 0.309 on dev_clean, tied at R2's budget).
+  `hist_n_mmsi_730d` is a behaviour signal but also something designating authorities cite, so
+  the model partly learns the sanctioners' selection criteria (label bias; README).
+- **Headline, fixed now:** sealed scope, v2 labels, **`ports_ens` - R2, pooled precision at k=50
+  per cutoff**, IMO-clustered 95% interval. Secondary: `ports_ens` - `static_lightgbm` (what this
+  push added over P4-3b's reference) and `ports_hist_ens` - `ports_ens`. Everything else is
+  descriptive.
+- **Commands (once each):**
+  `python -m model.walk_forward --scope sealed --unseal --labels v2 --no-embeddings
+  --feature-set ports=ports --feature-set ports_hist=ports+hist
+  --models r2,static_lightgbm,static_pu_lightgbm,ports_ens,ports_hist_ens
+  --compare ports_ens:static_lightgbm --compare ports_ens:static_pu_lightgbm
+  --compare ports_hist_ens:static_lightgbm --compare ports_hist_ens:ports_ens`, then the same with
+  `--labels v1`. v2-only line: for each kept model, the pooled number of positive rows inside its
+  top-k (k = 25/50) whose IMO is positive under v2 but never sanctioned under v1, next to R2's.

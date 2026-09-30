@@ -35,9 +35,16 @@ def _run(
         con.execute("CREATE TABLE panel (mmsi BIGINT, imo VARCHAR)")
         if panel_rows:
             con.executemany("INSERT INTO panel VALUES (?, ?)", panel_rows)
-        con.execute("CREATE TABLE vids (imo VARCHAR, gfw_vessel_id VARCHAR)")
+        con.execute(
+            "CREATE TABLE vids (imo VARCHAR, gfw_vessel_id VARCHAR, transmission_date_from TIMESTAMP)"
+        )
         if vessel_ids_rows:
-            con.executemany("INSERT INTO vids VALUES (?, ?)", vessel_ids_rows)
+            # (imo, id) rows get an identity start long before any window; (imo, id, from) rows
+            # set it explicitly.
+            con.executemany(
+                "INSERT INTO vids VALUES (?, ?, ?)",
+                [r if len(r) == 3 else (*r, datetime(2000, 1, 1)) for r in vessel_ids_rows],  # noqa: DTZ001 -- naive UTC, as stored
+            )
         con.execute(
             'CREATE TABLE visits (imo VARCHAR, "end" TIMESTAMP, confidence INTEGER, '
             "start_anchorage_flag VARCHAR, start_anchorage_name VARCHAR)"
@@ -403,8 +410,14 @@ def _write_vessel_ids(path: Path, rows: list[tuple]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     try:
-        con.execute("CREATE TABLE t (imo VARCHAR, gfw_vessel_id VARCHAR, use_for_features BOOLEAN)")
-        con.executemany("INSERT INTO t VALUES (?, ?, ?)", [(*r, True) if len(r) == 2 else r for r in rows])
+        con.execute(
+            "CREATE TABLE t (imo VARCHAR, gfw_vessel_id VARCHAR, use_for_features BOOLEAN, "
+            "transmission_date_from TIMESTAMP)"
+        )
+        con.executemany(
+            "INSERT INTO t VALUES (?, ?, ?, ?)",
+            [(*((*r, True) if len(r) == 2 else r), datetime(2000, 1, 1)) for r in rows],  # noqa: DTZ001 -- naive UTC, as stored
+        )
         con.execute(f"COPY t TO '{path.as_posix()}' (FORMAT PARQUET)")
     finally:
         con.close()
@@ -500,5 +513,17 @@ def test_build_port_visits_features_tolerates_missing_reference_files(tmp_path):
     )
 
     rows = _read(out_path)
+    assert rows[1]["gfw_resolved"] == 0
+    assert rows[1]["pv_n_total"] is None
+
+
+def test_identity_starting_after_window_end_does_not_resolve_the_imo():
+    """analyst-review 2026-09-30: an IMO whose only kept identity starts after window_end is not
+    resolved as of window_end (gfw_resolved 0, every pv_* NULL)."""
+    rows = _run(
+        panel_rows=[(1, "9111111")],
+        vessel_ids_rows=[("9111111", "vid-1", datetime(2024, 9, 5))],  # noqa: DTZ001 -- naive UTC, as stored
+        port_visits_rows=[],
+    )
     assert rows[1]["gfw_resolved"] == 0
     assert rows[1]["pv_n_total"] is None

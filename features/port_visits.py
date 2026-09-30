@@ -139,7 +139,9 @@ def port_visits_features_sql(
         SELECT mmsi, imo FROM ({panel_sql})
     ),
     resolved AS (
+        -- Resolved as of window_end: an identity that starts later says nothing yet.
         SELECT DISTINCT imo FROM ({vessel_ids_sql})
+        WHERE transmission_date_from < {window_end_literal}
     ),
     visits AS (
         SELECT imo, "end", confidence, start_anchorage_flag,
@@ -248,10 +250,11 @@ def build_port_visits_features(
             con.execute(f"SET threads = {int(threads)}")
         panel_sql = f"SELECT mmsi, imo FROM read_parquet('{panel_path.as_posix()}')"
         vessel_ids_sql = (
-            f"SELECT imo, gfw_vessel_id FROM read_parquet('{vessel_ids_path.as_posix()}') "
-            "WHERE use_for_features"
+            "SELECT imo, gfw_vessel_id, transmission_date_from "
+            f"FROM read_parquet('{vessel_ids_path.as_posix()}') WHERE use_for_features"
             if vessel_ids_path.exists()
-            else "SELECT NULL::VARCHAR AS imo, NULL::VARCHAR AS gfw_vessel_id WHERE false"
+            else "SELECT NULL::VARCHAR AS imo, NULL::VARCHAR AS gfw_vessel_id, "
+            "NULL::TIMESTAMP AS transmission_date_from WHERE false"
         )
         port_visits_sql = (
             f"SELECT * FROM read_parquet('{port_visits_path.as_posix()}')"

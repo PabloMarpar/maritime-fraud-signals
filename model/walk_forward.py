@@ -629,6 +629,8 @@ def run_walk_forward(
     unseal: bool = False,
     labels: str = "v1",
     feature_sets: dict[str, tuple[str, ...]] | None = None,
+    only_models: Sequence[str] | None = None,
+    extra_comparisons: Sequence[tuple[str, str]] = (),
 ) -> Path:
     """Run every cutoff and report on `scope`'s test rows only (P4-10). ``"all"`` reproduces
     P4-3b's report; it and ``"sealed"`` reveal sealed vessels and need ``unseal=True``."""
@@ -662,6 +664,10 @@ def run_walk_forward(
     for test in windows[1:]:
         name = test.start.isoformat()
         scores, info = score_cutoff(windows, test, use_tabicl, feature_sets)
+        if only_models is not None:
+            # P4-14: a sealed run keeps only the pre-named candidates; nothing else is written
+            # or reported, so nothing else can be picked afterwards.
+            scores = {m: s for m, s in scores.items() if m in set(only_models)}
         keep_rows = (
             np.ones(len(test.imo), dtype=bool) if scope == ALL_SCOPE else scope_mask(test.imo, scope)
         )
@@ -719,6 +725,7 @@ def run_walk_forward(
                       ("enc_tabicl", "tabicl")):
         if enc in models and base in models:
             comparisons.append((enc, base))
+    comparisons += [c for c in extra_comparisons if c not in comparisons]
     summary = _report(
         primary,
         cut_all,
@@ -762,6 +769,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--feature-set", action="append", default=[], metavar="NAME=GROUP[+GROUP]",
         help=f"Extra feature set on top of the static columns; groups: {sorted(EXTRA_GROUPS)}",
     )
+    p.add_argument(
+        "--models", default=None,
+        help="Comma-separated models to keep (P4-14's sealed run); everything else is discarded",
+    )
+    p.add_argument(
+        "--compare", action="append", default=[], metavar="A:B",
+        help="Extra pooled comparison A - B to report",
+    )
     p.add_argument("--labels", default="v1", choices=sorted(LABEL_VERSIONS),
                    help="Label version (P4-9): v1 = OFAC+UK snapshot, v2 = + EU/CA/NZ")
     p.add_argument(
@@ -784,6 +799,8 @@ def main(argv: list[str] | None = None) -> None:
         unseal=args.unseal,
         labels=args.labels,
         feature_sets=dict(parse_feature_set(s) for s in args.feature_set) or None,
+        only_models=args.models.split(",") if args.models else None,
+        extra_comparisons=[tuple(c.split(":", 1)) for c in args.compare],
     )
 
 

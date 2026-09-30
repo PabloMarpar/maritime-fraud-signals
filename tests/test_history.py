@@ -79,8 +79,9 @@ def test_null_imo_mmsi_is_treated_as_unresolved():
 
 
 def test_segment_starting_after_window_end_is_ignored():
-    """A segment whose transmissionDateFrom is after window_end must not be read at all -- the
-    imo is resolved (has a vessel_ids row) but has effectively no history as of this window."""
+    """A segment whose transmissionDateFrom is after window_end must not be read at all. If it is
+    the IMO's only identity, the IMO is not resolved as of window_end: every GFW column is NULL,
+    as for an IMO GFW does not know (analyst-review 2026-09-30)."""
     rows = _run_gfw(
         panel_rows=[(1, "9111111")],
         vessel_ids_rows=[
@@ -88,12 +89,9 @@ def test_segment_starting_after_window_end_is_ignored():
         ],
     )
     r = rows[1]
-    assert r["hist_n_flags_730d"] == 0
-    assert r["hist_n_names_730d"] == 0
-    assert r["hist_n_mmsi_730d"] == 0
-    assert r["hist_flag_age_days"] is None  # no segment to measure an age from
-    assert r["hist_ais_age_days"] is None
-    assert r["hist_to_foc_730d"] is False
+    for c in ("hist_n_flags_730d", "hist_n_names_730d", "hist_n_mmsi_730d",
+              "hist_flag_age_days", "hist_ais_age_days", "hist_to_foc_730d"):
+        assert r[c] is None, c
 
 
 def test_segment_straddling_window_end_still_counts():
@@ -108,20 +106,6 @@ def test_segment_straddling_window_end_still_counts():
     r = rows[1]
     assert r["hist_n_flags_730d"] == 1
     assert r["hist_ais_age_days"] == (WINDOW_END - date(2024, 1, 1)).days
-
-
-def test_resolved_with_no_qualifying_segment_gets_zero_counts_and_null_ages():
-    """Resolved (has a vessel_ids row) but that row's only segment starts after window_end --
-    same as the ignored-segment case above, phrased as the 'resolved but nothing found' posture
-    used throughout features/*.py."""
-    rows = _run_gfw(
-        panel_rows=[(1, "9111111")],
-        vessel_ids_rows=[("9111111", "vid-1", "111", "MV ONE", "PAN", _dt(2025, 1, 1), None)],
-    )
-    r = rows[1]
-    assert r["hist_n_flags_730d"] == 0
-    assert r["hist_flag_age_days"] is None
-    assert r["hist_ais_age_days"] is None
 
 
 # --------------------------------------------------------------------------------------------
