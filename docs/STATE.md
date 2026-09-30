@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-09-29_
+_Last updated: 2026-09-30_
 
 ## Done
 
@@ -374,6 +374,23 @@ _Last updated: 2026-09-29_
   (enc_logistic vs static_logistic ~-0.005 at R2's budget, 3 seeds). Not to be retuned on these
   results.
 
+- **Best-prediction push, 2026-09-29/30 (P4-9..P4-14, P4-3g, P4-3h): DONE, sealed result in.**
+  Full record: `docs/DECISIONS.md` from "P4-10: the sealed IMO split" to "P4-14: the sealed result".
+  - **Protocol:** `model/sealed_split.py` seals half the IMOs (crc32 hash; 260 examined IMOs frozen
+    in `model/examined_imos.txt`). Decisions on scope `dev_clean` (walk-forward default), k=50 per
+    cutoff; `--scope sealed/all` need `--unseal`. **The seal has been used (P4-14); any new
+    experiment must be declared exploratory or get a new held-out design.**
+  - **Labels v2** (`ingest/sanctions_v2.py`: EU vessel list via DMA, Canada, New Zealand) are the
+    primary label: `data/processed/panel_v2/`, `data/identity/sanctions_matches_v2.parquet`,
+    `--labels v2`.
+  - **New features:** GFW port visits (`ingest/gfw_port_visits.py`, `features/port_visits.py`),
+    history (`features/history.py`), Baltic trips (`detect/baltic_trips.py`, not adopted). Gate:
+    `python -m model.gfw_gate`.
+  - **Final model `ports_ens`** (rank mean of bagging-PU LightGBM + TabICLv2 on static + port-visit
+    columns): sealed k=50 precision 0.317 vs R2 0.064 (v2), +0.083 [+0.037, +0.129] over P4-3b's
+    static_lightgbm; v1 labels 0.271 vs 0.061. Finds 16 of 21 EU/CA/NZ-only positives in its top 50.
+    Reproduce: the command in DECISIONS' 2026-09-30 "sealed run fully specified" entry.
+
 ## In progress
 
 Nothing running. If an archive window ever needs rebuilding: `scripts/build_archive_windows.sh`
@@ -385,30 +402,19 @@ needs it).
 
 ## Next up
 
-1. **README (task P4-8, `CLAUDE.md` requires it):** add the walk-forward, TabICLv2 and P4-3j
-   results with their limitations -- the destination regexes were designed on June/November
-   vessels (71% of the pool's test positives), labels are effectively OFAC + UK (EU-only vessels
-   count as negatives), the behavioural detectors and the encoder add nothing, static-model wins
-   at R2's budget are small because the ceiling is 0.216. Fold in P4-7 (label bias).
-2. **P4-3g, discrete-time hazard model.** Every vessel designated inside the archive contributes
-   its pre-designation months (~100+ positives). Pre-register before running; the P4-3j
-   embedding may be re-tested there only if pre-registered too. `analyst-review` afterwards.
-3. **P4-3h, implied Russian loading from draught** (eastbound in ballast, westbound laden).
-   Thresholds fixed on March 2024 only; validate against GFW port visits.
-4. **Web (P5):** now that the archive is built, run `python -m report.export_viz`, regenerate the
-   share cards (`viz/scripts/og-images.mjs`, needs `npx astro preview`), rebuild, and redeploy
-   (`cd viz`, `../relay/node_modules/.bin/wrangler deploy`). P5-4's confidence levels are no
-   longer blocked (static LightGBM/TabICLv2 beat R2). P5-10 waits for the author's Cloudflare
-   Web Analytics token. P5-8: shard the dossiers before 20,000 files per deployment. Local
-   viewing: `PUBLIC_LIVE_URL=ws://127.0.0.1:8765 npx astro build` + `npx astro preview` with a
-   local relay.
-5. Then P4-4 (calibration), P4-5 (SHAP), bagging PU as a cheap challenger; P4-3d signal ideas.
-
-**Research report.** The deep search (2026-09-27) lives in
-`reports/Modelos para predecir la flota fantasma.md` and `research_notes/`. Both are in Spanish
-and kept out of git at the author's request (listed in `.git/info/exclude`). Headline: nobody has
-published a forward-in-time sanctions predictor, and at this label count, gains come from data
-design, not model architecture.
+1. **README (P4-8, folds in P4-7; `CLAUDE.md` requires it).** Results: P4-3b walk-forward, the
+   sealed P4-14 result (headline above) and what each line added or not (DECISIONS). Limitations,
+   all listed at the end of the P4-14 entry: 19 dev configurations, order-dependent chain; P4-3b
+   saw aggregates incl. sealed vessels; Russian port visits ~ the designation reason; identity
+   churn partly learns sanctioners' criteria; GFW richness flags (`outputs/gfw_gate.txt`); GFW is
+   non-commercial with attribution; no Australia/Switzerland lists; delisted vessels count as
+   never sanctioned; detectors and the P4-3j encoder add nothing.
+2. **Web (P5):** before showing `ports_ens` scores publicly, check GFW's terms for derived
+   per-vessel scores and add attribution. Then `report/export_viz.py`, share cards, redeploy
+   (`cd viz`, `../relay/node_modules/.bin/wrangler deploy`). P5-4 confidence levels can use
+   `ports_ens`. P5-10 waits for the Cloudflare Web Analytics token; P5-8 shard dossiers.
+3. Then P4-4 (calibration) and P4-5 (SHAP) on `ports_ens`'s LightGBM part; P4-3d ideas only as
+   exploratory (the seal is spent).
 
 ## Blocked
 

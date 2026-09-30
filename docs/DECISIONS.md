@@ -2651,3 +2651,10 @@ _2026-09-30_ (P4-14: the sealed result -- run once, as specified)
   aggregates that included sealed vessels; Russian port visits are close to the designation reason
   itself; `hist_n_mmsi_730d` partly learns sanctioners' criteria; GFW richness flags; GFW data is
   non-commercial; labels exclude Australia/Switzerland and delisted vessels.
+
+_2026-09-30_ (session close)
+
+- **The sealed half is spent** (P4-14 ran once): later experiments on the same windows are
+  exploratory unless a new held-out design is pre-registered first.
+- **`ports_ens` is the project's model** for the README and the website; `ports_hist_ens` is
+  reported as the runner-up, not adopted (R2-budget clause).
