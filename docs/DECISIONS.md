@@ -2566,3 +2566,28 @@ _2026-09-30_ (review fixes applied; contamination gate committed)
   churn -- a behaviour, the kind of signal sought -- rather than GFW researching notorious
   vessels. Fewer recorded port visits for positives fits going dark in port. All three go in the
   README's limitations as flagged, not hidden.
+
+_2026-09-30_ (dev_clean rerun on the fixed GFW data; the chain re-decided; finalists re-named)
+
+- **Run.** `--labels v2 --feature-set ports=ports --feature-set ports_hist=ports+hist` with
+  TabICLv2 (`outputs/wf_dev_clean_v2_fixed.txt`). All results before the fixes (ports,
+  ports_hist, ens on ports_hist) are superseded.
+- **Pooled dev_clean, k=50 [0.417] / R2's budget [0.088]:** static_pu_lightgbm 0.277 / 0.081;
+  ports_pu_lightgbm 0.294 / 0.085; ports_ens 0.309 / 0.085; ports_hist_pu_lightgbm 0.320 / 0.084;
+  ports_hist_tabicl 0.329 / 0.084; ports_hist_ens 0.340 / 0.085. The fixes barely moved the
+  numbers (ports 0.297 -> 0.294, ports_hist 0.317 -> 0.320): the leak was not driving the gains.
+- **Chain, amended rule 3 applied literally:** ports (0.294 vs 0.277, R2's budget 0.085 vs
+  0.081) -> adopted. hist on top (0.320 vs 0.294 at k=50, but R2's budget 0.084 vs 0.085, -0.001
+  [-0.001, +0.002]) -> **not adopted**: the rule says "without lowering precision at R2's budget"
+  and the point estimate is lower, however slightly. Ensemble on ports (0.309 vs 0.294, R2's budget
+  +0.000) -> adopted. **Rule's final model: `ports_ens`, 0.309 at k=50 on dev_clean.**
+- **Configurations tried on dev_clean: 19** (11 before + 8 on the fixed data: ports and
+  ports_hist x lightgbm/PU/TabICL/ens).
+- **P4-14 candidates (replaces the list of 2026-09-29, still before any sealed number):**
+  primary finalist **`ports_ens`** (the rule's model); second finalist **`ports_hist_ens`** (best at
+  k=50 on dev_clean, failed the R2-budget clause by 0.001); references R2, `static_lightgbm`,
+  `static_pu_lightgbm`. Command: `python -m model.walk_forward --scope sealed --unseal --labels v2
+  --no-embeddings --feature-set ports=ports --feature-set ports_hist=ports+hist`, once, then the
+  same with `--labels v1`. Primary comparisons, P0 rule, IMO-clustered: each finalist vs R2, vs
+  `static_lightgbm` and vs `static_pu_lightgbm`; `ports_hist_ens` vs `ports_ens`. Plus a line
+  restricted to positives that exist only under v2.
