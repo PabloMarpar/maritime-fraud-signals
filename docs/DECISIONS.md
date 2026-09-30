@@ -2619,3 +2619,35 @@ _2026-09-30_ (second `analyst-review`: no blocker; last fixes; the sealed run fu
   --compare ports_hist_ens:static_lightgbm --compare ports_hist_ens:ports_ens`, then the same with
   `--labels v1`. v2-only line: for each kept model, the pooled number of positive rows inside its
   top-k (k = 25/50) whose IMO is positive under v2 but never sanctioned under v1, next to R2's.
+
+_2026-09-30_ (P4-14: the sealed result -- run once, as specified)
+
+- **Sealed, v2 labels** (`outputs/walk_forward_summary_sealed_v2.txt`; 147 positive rows over
+  the 7 primary cutoffs). Pooled precision at k=50 per cutoff [ceiling 0.420]: R2 0.064,
+  static_lightgbm 0.234, static_pu_lightgbm 0.266, **ports_ens 0.317**, ports_hist_ens 0.329.
+  - **Headline: ports_ens - R2 = +0.253 [+0.183, +0.322]** (IMO-clustered 95%).
+  - Secondary: ports_ens - static_lightgbm +0.083 [+0.037, +0.129]; ports_ens -
+    static_pu_lightgbm +0.051 [+0.009, +0.106]; ports_hist_ens - ports_ens +0.011 [-0.017,
+    +0.040] (no difference).
+  - k=25 [0.743]: 0.064 / 0.331 / 0.360 / 0.440 / 0.469. k=100 [0.210]: 0.064 / 0.161 / 0.171 /
+    0.187 / 0.181. R2's budget [0.082]: 0.066 / 0.080 / 0.081 / 0.080 / 0.077 (every model beats R2
+    there; none differs from another).
+  - dev_clean predicted 0.309 for ports_ens at k=50; sealed gave 0.317. No sign of selection
+    optimism beyond noise, despite 19 configurations tried.
+- **Sealed, v1 labels** (`outputs/walk_forward_summary_sealed.txt`), k=50 [0.371]: R2 0.061,
+  static_lightgbm 0.226, static_pu_lightgbm 0.243, ports_ens 0.271, ports_hist_ens 0.260;
+  ports_ens - R2 +0.211 [+0.141, +0.276]; ports_ens - static_lightgbm +0.046 [+0.006, +0.089].
+- **v2-only positives** (IMO positive under v2, never sanctioned under v1; 21 of the 147 sealed
+  positive rows), expected rows inside each model's top-k, pooled: k=50 -- R2 1.7, static_lightgbm
+  5, static_pu_lightgbm 5, **ports_ens 16**, ports_hist_ens 17; k=25 -- 0.9 / 2 / 4 / 11 / 11.
+  These vessels never counted as positives in any design decision; the port-visit columns are what
+  finds them (EU/CA/NZ listings are mostly Russia's shadow fleet).
+- **Final model: `ports_ens`** = rank mean of bagging-PU LightGBM and TabICLv2 on the P4-3c static
+  columns + GFW port-visit columns, trained on v2 labels. On vessels nobody examined, about 1 alert
+  in 3 at 50 alerts a month is a vessel later sanctioned, ~5x R2; the gain over P4-3b's reference
+  is significant under both label versions.
+- **For the README (limitations):** 19 configurations on dev_clean, chain order-dependent, no
+  single dev increment significant (the sealed differences are); P4-3b's column choices saw
+  aggregates that included sealed vessels; Russian port visits are close to the designation reason
+  itself; `hist_n_mmsi_730d` partly learns sanctioners' criteria; GFW richness flags; GFW data is
+  non-commercial; labels exclude Australia/Switzerland and delisted vessels.
